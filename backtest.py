@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 def run_backtest():
     print("데이터를 다운로드하는 중입니다...")
     
-    # 1. 대상 자산 및 파라미터 설정
+    # 1. 대상 자산 및 파라미터 설정 (최적화된 오리지널 비중)
     tickers = ['QQQ', 'TLT', 'GLD', 'XLE']
     base_weights = {'QQQ': 0.45, 'TLT': 0.35, 'GLD': 0.20, 'XLE': 0.00}
     mas = [20, 120, 200]
@@ -16,7 +16,7 @@ def run_backtest():
     for ticker in tickers:
         df = yf.download(ticker, start='2004-01-01', progress=False)
         
-        # 반환된 데이터가 MultiIndex인 경우 최상단 컬럼명만 추출 (v0.2.40+ 대응)
+        # 반환된 데이터가 MultiIndex인 경우 최상단 컬럼명만 추출
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
@@ -49,13 +49,13 @@ def run_backtest():
             m_vals = ma.values
             curr_state = 0
             
-            # +/- 3% 밴드 적용
+            # +/- 3% 밴드 적용 (검증된 안정적인 3% 유지)
             for i in range(len(p_vals)):
                 if np.isnan(m_vals[i]):
                     continue
-                if p_vals[i] > m_vals[i] * 1.02:
+                if p_vals[i] > m_vals[i] * 1.03:
                     curr_state = 1
-                elif p_vals[i] < m_vals[i] * 0.98:
+                elif p_vals[i] < m_vals[i] * 0.97:
                     curr_state = 0
                 state[i] = curr_state
                 
@@ -63,6 +63,7 @@ def run_backtest():
             
         # 신호(0~3)에 따른 투자 비중 계산 (0%, 33.3%, 66.6%, 100%)
         invested_fraction = total_signals / 3.0
+        # 미래 참조 오류 방지
         invested_fraction = invested_fraction.shift(1).fillna(0)
         
         actual_weight = invested_fraction * base_weights[ticker]
@@ -82,11 +83,17 @@ def run_backtest():
     cagr = cum_returns.iloc[-1] ** (1 / years) - 1
     ann_ret = portfolio_return.mean() * 252
     ann_vol = portfolio_return.std() * np.sqrt(252)
-    sharpe = (ann_ret - 0.02) / ann_vol  # 무위험수익률 2% 차감
+    sharpe = (ann_ret - 0.02) / ann_vol
 
     roll_max = cum_returns.cummax()
     drawdown = (cum_returns - roll_max) / roll_max
     mdd = drawdown.min()
+
+    # 6.5 거래 횟수(Turnover) 계산
+    weight_changes = asset_weights.diff().fillna(0)
+    trades_per_asset = (weight_changes != 0).sum()
+    total_trades = trades_per_asset.sum()
+    trades_per_year = total_trades / years
 
     # 7. 결과 터미널 출력
     print("\n" + "="*50)
@@ -99,6 +106,9 @@ def run_backtest():
     print(f"▶ 최대 낙폭 (MDD)    : {mdd*100:.2f}%")
     print(f"▶ 연평균 변동성      : {ann_vol*100:.2f}%")
     print(f"▶ 샤프 지수 (Sharpe) : {sharpe:.2f}")
+    print("-" * 50)
+    print(f"▶ 총 리밸런싱 횟수   : {total_trades:.0f}회 (연평균 {trades_per_year:.1f}회)")
+    print(f"   [상세] QQQ: {trades_per_asset['QQQ']}회 | TLT: {trades_per_asset['TLT']}회 | GLD: {trades_per_asset['GLD']}회 | XLE: {trades_per_asset['XLE']}회")
     print("="*50)
 
     # 8. 그래프 이미지 저장
