@@ -8,7 +8,7 @@ def run_backtest():
     
     # 1. 대상 자산 및 파라미터 설정
     tickers = ['QQQ', 'TLT', 'GLD', 'XLE']
-    base_weights = {'QQQ': 0.5, 'TLT': 0.3, 'GLD': 0.20, 'XLE': 0.00}
+    base_weights = {'QQQ': 0.45, 'TLT': 0.35, 'GLD': 0.20, 'XLE': 0.00}
     mas = [20, 120, 200]
     
     # 2. 데이터 다운로드 (yfinance 최신 버전 호환성 강화)
@@ -53,9 +53,9 @@ def run_backtest():
             for i in range(len(p_vals)):
                 if np.isnan(m_vals[i]):
                     continue
-                if p_vals[i] > m_vals[i] * 1.03:
+                if p_vals[i] > m_vals[i] * 1.02:
                     curr_state = 1
-                elif p_vals[i] < m_vals[i] * 0.97:
+                elif p_vals[i] < m_vals[i] * 0.98:
                     curr_state = 0
                 state[i] = curr_state
                 
