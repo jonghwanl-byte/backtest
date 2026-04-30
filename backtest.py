@@ -99,7 +99,7 @@ def run_backtest():
     print("\n" + "="*50)
     print("   Independent-Hysteresis-TAA Backtest Result")
     print("="*50)
-    print(f"목표 비중    : QQQ {base_weights['QQQ']*100:.0f}%, TLT {base_weights['TLT']*100:.0f}%, GLD {base_weights['GLD']*100:.0f}%, XLE {base_weights['XLE']*100:.0f}%")
+    print(f"목표 비중    : QQQ {base_weights['QQQ']*100:.0f}%, TLT {base_weights['TLT']*100:.0f}%, GLD {base_weights['GLD']*100:.0f}%)
     print(f"테스트 기간  : {cum_returns.index[0].date()} ~ {cum_returns.index[-1].date()}")
     print("-" * 50)
     print(f"▶ 연평균 수익 (CAGR) : {cagr*100:.2f}%")
@@ -108,7 +108,7 @@ def run_backtest():
     print(f"▶ 샤프 지수 (Sharpe) : {sharpe:.2f}")
     print("-" * 50)
     print(f"▶ 총 리밸런싱 횟수   : {total_trades:.0f}회 (연평균 {trades_per_year:.1f}회)")
-    print(f"   [상세] QQQ: {trades_per_asset['QQQ']}회 | TLT: {trades_per_asset['TLT']}회 | GLD: {trades_per_asset['GLD']}회 | XLE: {trades_per_asset['XLE']}회")
+    print(f"   [상세] QQQ: {trades_per_asset['QQQ']}회 | TLT: {trades_per_asset['TLT']}회 | GLD: {trades_per_asset['GLD']}회")
     print("="*50)
 
     # 8. 그래프 이미지 저장
