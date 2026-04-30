@@ -99,7 +99,7 @@ def run_backtest():
     print("\n" + "="*50)
     print("   Independent-Hysteresis-TAA Backtest Result")
     print("="*50)
-    print(f"목표 비중    : QQQ {base_weights['QQQ']*100:.0f}%, TLT {base_weights['TLT']*100:.0f}%, GLD {base_weights['GLD']*100:.0f}%)
+    print(f"목표 비중    : QQQ {base_weights['QQQ']*100:.0f}%, TLT {base_weights['TLT']*100:.0f}%, GLD {base_weights['GLD']*100:.0f}%")
     print(f"테스트 기간  : {cum_returns.index[0].date()} ~ {cum_returns.index[-1].date()}")
     print("-" * 50)
     print(f"▶ 연평균 수익 (CAGR) : {cagr*100:.2f}%")
