@@ -53,9 +53,9 @@ def run_backtest():
             for i in range(len(p_vals)):
                 if np.isnan(m_vals[i]):
                     continue
-                if p_vals[i] > m_vals[i] * 1.03:
+                if p_vals[i] > m_vals[i] * 1.02:
                     curr_state = 1
-                elif p_vals[i] < m_vals[i] * 0.97:
+                elif p_vals[i] < m_vals[i] * 0.98:
                     curr_state = 0
                 state[i] = curr_state
                 
