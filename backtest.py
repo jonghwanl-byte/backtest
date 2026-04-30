@@ -7,8 +7,8 @@ def run_backtest():
     print("데이터를 다운로드하는 중입니다...")
     
     # 1. 대상 자산 및 파라미터 설정 (최적화된 오리지널 비중)
-    tickers = ['QQQ', 'TLT', 'GLD', 'XLE']
-    base_weights = {'QQQ': 0.0, 'TLT': 0.0, 'GLD': 1.0, 'XLE': 0.0}
+    tickers = ['QQQ', 'TLT', 'GLD']
+    base_weights = {'QQQ': 0.5, 'TLT': 0.3, 'GLD': 0.2}
     mas = [20, 120, 200]
     
     # 2. 데이터 다운로드 (yfinance 최신 버전 호환성 강화)
@@ -53,9 +53,9 @@ def run_backtest():
             for i in range(len(p_vals)):
                 if np.isnan(m_vals[i]):
                     continue
-                if p_vals[i] > m_vals[i] * 1.04:
+                if p_vals[i] > m_vals[i] * 1.03:
                     curr_state = 1
-                elif p_vals[i] < m_vals[i] * 0.96:
+                elif p_vals[i] < m_vals[i] * 0.97:
                     curr_state = 0
                 state[i] = curr_state
                 
