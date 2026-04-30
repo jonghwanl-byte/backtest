@@ -8,7 +8,7 @@ def run_backtest():
     
     # 1. 대상 자산 및 파라미터 설정 (최적화된 오리지널 비중)
     tickers = ['QQQ', 'TLT', 'GLD', 'XLE']
-    base_weights = {'QQQ': 0.0, 'TLT': 1.0, 'GLD': 0.0, 'XLE': 0.0}
+    base_weights = {'QQQ': 1.0, 'TLT': 0.0, 'GLD': 0.0, 'XLE': 0.0}
     mas = [20, 120, 200]
     
     # 2. 데이터 다운로드 (yfinance 최신 버전 호환성 강화)
