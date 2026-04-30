@@ -6,21 +6,22 @@ import matplotlib.pyplot as plt
 def run_backtest():
     print("데이터를 다운로드하는 중입니다...")
     
-    # 1. 대상 자산 및 파라미터 설정 (최적화된 오리지널 비중)
+    # 1. 대상 자산 및 파라미터 설정
     tickers = ['QQQ', 'TLT', 'GLD']
-    base_weights = {'QQQ': 0.5, 'TLT': 0.35, 'GLD': 0.15}
+    base_weights = {'QQQ': 0.50, 'TLT': 0.35, 'GLD': 0.15}
     mas = [20, 120, 200]
     
-    # 2. 데이터 다운로드 (yfinance 최신 버전 호환성 강화)
+    # 신호 강도 (0개: 0%, 1개: 50%, 2개: 75%, 3개: 100%)
+    scalar_map = {0: 0.0, 1: 0.50, 2: 0.75, 3: 1.00}
+    
+    # 2. 데이터 다운로드 (yfinance 최신 버전 호환성 및 Adj Close 우선)
     data = pd.DataFrame()
     for ticker in tickers:
         df = yf.download(ticker, start='2004-01-01', progress=False)
         
-        # 반환된 데이터가 MultiIndex인 경우 최상단 컬럼명만 추출
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
-        # 구버전('Adj Close' 존재)과 신버전('Close'가 곧 수정주가) 모두 대응
         if 'Adj Close' in df.columns:
             data[ticker] = df['Adj Close']
         else:
@@ -43,13 +44,12 @@ def run_backtest():
         for ma_period in mas:
             ma = price.rolling(window=ma_period).mean()
             
-            # Hysteresis 상태 배열 초기화
             state = np.zeros(len(price))
             p_vals = price.values
             m_vals = ma.values
             curr_state = 0
             
-            # +/- 3% 밴드 적용 (검증된 안정적인 3% 유지)
+            # +/- 3% 밴드 적용
             for i in range(len(p_vals)):
                 if np.isnan(m_vals[i]):
                     continue
@@ -61,8 +61,9 @@ def run_backtest():
                 
             total_signals += state
             
-        # 신호(0~3)에 따른 투자 비중 계산 (0%, 33.3%, 66.6%, 100%)
-        invested_fraction = total_signals / 3.0
+        # map() 함수를 사용하여 각 날짜의 신호 개수를 스칼라 값으로 변환
+        invested_fraction = total_signals.map(scalar_map)
+        
         # 미래 참조 오류 방지
         invested_fraction = invested_fraction.shift(1).fillna(0)
         
@@ -100,6 +101,7 @@ def run_backtest():
     print("   Independent-Hysteresis-TAA Backtest Result")
     print("="*50)
     print(f"목표 비중    : QQQ {base_weights['QQQ']*100:.0f}%, TLT {base_weights['TLT']*100:.0f}%, GLD {base_weights['GLD']*100:.0f}%")
+    print(f"신호 강도    : 1개=50%, 2개=75%, 3개=100%")
     print(f"테스트 기간  : {cum_returns.index[0].date()} ~ {cum_returns.index[-1].date()}")
     print("-" * 50)
     print(f"▶ 연평균 수익 (CAGR) : {cagr*100:.2f}%")
