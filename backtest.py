@@ -8,7 +8,7 @@ def run_backtest():
     
     # 1. 대상 자산 및 파라미터 설정
     tickers = ['QQQ', 'TLT', 'GLD']
-    base_weights = {'QQQ': 0.5, 'TLT': 0.2, 'GLD': 0.3}
+    base_weights = {'QQQ': 0.5, 'TLT': 0.25, 'GLD': 0.25}
     mas = [20, 120, 200]
     
     # 신호 강도 (0개: 0%, 1개: 50%, 2개: 75%, 3개: 100%)
