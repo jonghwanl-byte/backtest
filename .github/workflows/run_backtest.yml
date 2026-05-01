@@ -23,3 +23,10 @@ jobs:
 
       - name: Run Backtest Script
         run: python backtest.py
+
+      - name: Upload chart image
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-chart      # 다운로드될 압축파일 이름
+          path: backtest_result.png # 파이썬이 저장한 파일 이름
+
