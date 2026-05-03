@@ -3,12 +3,12 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-def run_backtest_v2():
-    print("[Version 2] 매크로 마스터 스위치 백테스트 시작...")
+def run_backtest_v1():
+    print("[Version 1] 절대 모멘텀 필터 백테스트 시작...")
     
-    # 1. 파라미터 (SHY 불필요)
-    tickers = ['QQQ', 'TLT', 'GLD']
-    base_weights = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25}
+    # 1. 파라미터 (단기채 SHY를 벤치마크 마크용으로 추가)
+    tickers = ['QQQ', 'TLT', 'GLD', 'SHY']
+    base_weights = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25, 'SHY': 0.00} 
     mas = [20, 120, 200]
     scalar_map = {0: 0.0, 1: 0.50, 2: 0.75, 3: 1.00}
     
@@ -23,6 +23,10 @@ def run_backtest_v2():
     data = data.dropna()
     returns = data.pct_change().dropna()
 
+    # [핵심 로직 1] SHY(단기채)의 6개월(120일) 수익률 모멘텀 사전 계산
+    shy_price = data['SHY']
+    shy_mom = shy_price / shy_price.shift(120) - 1
+
     portfolio_return = pd.Series(0.0, index=returns.index)
     asset_weights = pd.DataFrame(index=returns.index, columns=tickers)
 
@@ -30,7 +34,6 @@ def run_backtest_v2():
     for ticker in tickers:
         price = data[ticker]
         total_signals = pd.Series(0, index=price.index)
-        state_200 = pd.Series(1, index=price.index) # 200일선 상태 저장용
         
         for ma_period in mas:
             ma = price.rolling(window=ma_period).mean()
@@ -44,17 +47,14 @@ def run_backtest_v2():
                 if p_vals[i] > m_vals[i] * 1.03: curr_state = 1
                 elif p_vals[i] < m_vals[i] * 0.97: curr_state = 0
                 state[i] = curr_state
-            
             total_signals += state
             
-            # [핵심 로직 1] 200일선의 Hysteresis 상태만 따로 기록
-            if ma_period == 200:
-                state_200 = pd.Series(state, index=price.index)
-            
-        # [핵심 로직 2] TLT에만 200일선 마스터 스위치 적용
+        # [핵심 로직 2] TLT에만 절대 모멘텀 필터 적용
         if ticker == 'TLT':
-            # 200일선 상태가 0(OFF)이면, 20/120일선이 켜져도 무조건 총점 0점 처리
-            total_signals = np.where(state_200 == 0, 0, total_signals)
+            tlt_mom = price / price.shift(120) - 1
+            # TLT 모멘텀이 SHY(현금이자)보다 낮으면 점수를 0으로 강제 초기화
+            filter_condition = tlt_mom < shy_mom
+            total_signals = np.where(filter_condition, 0, total_signals)
             total_signals = pd.Series(total_signals, index=price.index)
             
         invested_fraction = total_signals.map(scalar_map)
@@ -77,7 +77,7 @@ def run_backtest_v2():
     mdd = ((cum_returns - cum_returns.cummax()) / cum_returns.cummax()).min()
 
     print("\n" + "="*50)
-    print("   [V2] TLT 매크로 마스터스위치 적용 백테스트")
+    print("   [V1] TLT 절대 모멘텀 필터 적용 백테스트")
     print("="*50)
     print(f"▶ 연평균 수익 (CAGR) : {cagr*100:.2f}%")
     print(f"▶ 최대 낙폭 (MDD)    : {mdd*100:.2f}%")
@@ -85,4 +85,4 @@ def run_backtest_v2():
     print("="*50)
 
 if __name__ == "__main__":
-    run_backtest_v2()
+    run_backtest_v1()
