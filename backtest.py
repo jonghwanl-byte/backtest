@@ -3,71 +3,65 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-def run_tlt_comparison():
-    print("TLT 데이터를 다운로드하는 중입니다...")
+def run_hybrid_backtest():
+    print("데이터를 다운로드하는 중입니다...")
     
-    # 1. 데이터 다운로드
-    ticker = 'TLT'
-    df = yf.download(ticker, start='2004-01-01', progress=False)
-    
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-        
-    prices = df['Adj Close'] if 'Adj Close' in df.columns else df['Close']
-    prices = prices.dropna()
-    returns = prices.pct_change().dropna()
-    
-    # To-be 신호 강도
+    # 1. 대상 자산 및 최종 파라미터 설정
+    tickers = ['QQQ', 'TLT', 'GLD']
+    base_weights = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25}
+    mas = [20, 120, 200]
     scalar_map = {0: 0.0, 1: 0.50, 2: 0.75, 3: 1.00}
-    cash_rate = 0.02 / 252 # 현금 이자 연 2%
-
-    # 2. 4가지 테스트 시나리오 정의
-    scenarios = [
-        {
-            "name": "기존 (3% 룰)",
-            "up_band": 1.03, "dn_band": 0.97, "mas": [20, 120, 200]
-        },
-        {
-            "name": "대안 A (비대칭: 매수 +3% / 매도 -1%)",
-            "up_band": 1.03, "dn_band": 0.99, "mas": [20, 120, 200]
-        },
-        {
-            "name": "대안 B (1.5% 맞춤형 밴드)",
-            "up_band": 1.015, "dn_band": 0.985, "mas": [20, 120, 200]
-        },
-        {
-            "name": "대안 C (MA 기간 60/120/200, 3% 룰)",
-            "up_band": 1.03, "dn_band": 0.97, "mas": [60, 120, 200]
-        }
-    ]
-
-    print("각 시나리오별 백테스트를 계산하는 중입니다...\n")
-    print("="*60)
-    print("   TLT 단독 (100%) 하락장 탈출 전략 비교 백테스트")
-    print("="*60)
-
-    # 그래프 그리기 준비
-    plt.figure(figsize=(14, 10))
-    colors = ['gray', 'blue', 'green', 'red']
-
-    for idx, sc in enumerate(scenarios):
-        mas = sc["mas"]
-        up_band = sc["up_band"]
-        dn_band = sc["dn_band"]
+    
+    # [핵심 로직] 자산별 맞춤형 이격도 밴드 (상단돌파 / 하단이탈)
+    # QQQ, GLD : 기존 대칭 룰 (+3% / -3%)
+    # TLT : 비대칭 칼손절 룰 (+3% / -1%)
+    bands = {
+        'QQQ': (1.03, 0.97),
+        'TLT': (1.03, 0.99),
+        'GLD': (1.03, 0.97)
+    }
+    
+    # 2. 데이터 다운로드
+    data = pd.DataFrame()
+    for ticker in tickers:
+        df = yf.download(ticker, start='2004-01-01', progress=False)
         
-        total_signals = pd.Series(0, index=prices.index)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        if 'Adj Close' in df.columns:
+            data[ticker] = df['Adj Close']
+        else:
+            data[ticker] = df['Close']
+            
+    data = data.dropna()
+    returns = data.pct_change().dropna()
+
+    print("하이브리드 백테스트를 계산하는 중입니다...")
+    
+    # 3. 포트폴리오 수익률 및 비중 추적
+    portfolio_return = pd.Series(0.0, index=returns.index)
+    asset_weights = pd.DataFrame(index=returns.index, columns=tickers)
+
+    # 4. Hysteresis TAA 로직 적용 (종목별 밴드 동적 할당)
+    for ticker in tickers:
+        price = data[ticker]
+        total_signals = pd.Series(0, index=price.index)
+        
+        # 딕셔너리에서 해당 종목의 상단/하단 밴드값 추출
+        up_band, dn_band = bands[ticker]
         
         for ma_period in mas:
-            ma = prices.rolling(window=ma_period).mean()
-            state = np.zeros(len(prices))
-            p_vals = prices.values
+            ma = price.rolling(window=ma_period).mean()
+            
+            state = np.zeros(len(price))
+            p_vals = price.values
             m_vals = ma.values
             curr_state = 0
             
             for i in range(len(p_vals)):
                 if np.isnan(m_vals[i]):
                     continue
-                # 진입/이탈 조건
                 if p_vals[i] > m_vals[i] * up_band:
                     curr_state = 1
                 elif p_vals[i] < m_vals[i] * dn_band:
@@ -76,58 +70,76 @@ def run_tlt_comparison():
                 
             total_signals += state
             
-        # 비중 계산
-        invested_fraction = total_signals.map(scalar_map).shift(1).fillna(0)
-        cash_fraction = 1.0 - invested_fraction
+        # 신호에 따른 스칼라 값 맵핑 및 비중 계산
+        invested_fraction = total_signals.map(scalar_map)
+        invested_fraction = invested_fraction.shift(1).fillna(0)
         
-        # 포트폴리오 수익률 = (TLT 수익) + (현금 이자 수익)
-        port_returns = (invested_fraction * returns) + (cash_fraction * cash_rate)
-        
-        # 성과 지표 계산
-        cum_returns = (1 + port_returns).cumprod()
-        years = len(cum_returns) / 252.0
-        cagr = cum_returns.iloc[-1] ** (1 / years) - 1
-        ann_vol = port_returns.std() * np.sqrt(252)
-        sharpe = (port_returns.mean() * 252 - 0.02) / ann_vol
-        
-        roll_max = cum_returns.cummax()
-        drawdown = (cum_returns - roll_max) / roll_max
-        mdd = drawdown.min()
-        
-        # 매매 횟수 계산
-        weight_changes = invested_fraction.diff().fillna(0)
-        total_trades = (weight_changes != 0).sum()
-        trades_per_year = total_trades / years
+        actual_weight = invested_fraction * base_weights[ticker]
+        asset_weights[ticker] = actual_weight
+        portfolio_return += actual_weight * returns[ticker]
 
-        # 결과 출력
-        print(f"[{idx+1}] {sc['name']}")
-        print(f"    ▶ CAGR: {cagr*100:.2f}% | MDD: {mdd*100:.2f}% | Sharpe: {sharpe:.2f}")
-        print(f"    ▶ 총 매매 횟수: {total_trades}회 (연평균 {trades_per_year:.1f}회)")
-        print("-" * 60)
+    # 5. 파킹(Cash) 비중에 대한 이자 수익 (연 2%)
+    total_invested = asset_weights.sum(axis=1)
+    cash_weight = 1.0 - total_invested
+    cash_return = 0.02 / 252  
+    portfolio_return += cash_weight * cash_return
 
-        # 그래프 추가
-        plt.subplot(2, 1, 1)
-        plt.plot(cum_returns.index, cum_returns, label=f"{sc['name']} (CAGR {cagr*100:.2f}%)", color=colors[idx], linewidth=1.5 if idx > 0 else 1)
-        
-        plt.subplot(2, 1, 2)
-        plt.plot(drawdown.index, drawdown * 100, label=f"{sc['name']} (MDD {mdd*100:.2f}%)", color=colors[idx], linewidth=1.5 if idx > 0 else 1)
+    # 6. 성과 지표 계산
+    cum_returns = (1 + portfolio_return).cumprod()
+    years = len(cum_returns) / 252.0
 
-    # 차트 꾸미기
+    cagr = cum_returns.iloc[-1] ** (1 / years) - 1
+    ann_ret = portfolio_return.mean() * 252
+    ann_vol = portfolio_return.std() * np.sqrt(252)
+    sharpe = (ann_ret - 0.02) / ann_vol
+
+    roll_max = cum_returns.cummax()
+    drawdown = (cum_returns - roll_max) / roll_max
+    mdd = drawdown.min()
+
+    # 6.5 매매 횟수 계산
+    weight_changes = asset_weights.diff().fillna(0)
+    trades_per_asset = (weight_changes != 0).sum()
+    total_trades = trades_per_asset.sum()
+    trades_per_year = total_trades / years
+
+    # 7. 결과 터미널 출력
+    print("\n" + "="*55)
+    print("   Hybrid Hysteresis-TAA Backtest Result")
+    print("="*55)
+    print(f"목표 비중 : QQQ {base_weights['QQQ']*100:.0f}%, TLT {base_weights['TLT']*100:.0f}%, GLD {base_weights['GLD']*100:.0f}%")
+    print(f"신호 강도 : 1개=50%, 2개=75%, 3개=100%")
+    print(f"적용 밴드 : QQQ(±3%), GLD(±3%), TLT(+3%/-1%)")
+    print(f"테스트기간: {cum_returns.index[0].date()} ~ {cum_returns.index[-1].date()}")
+    print("-" * 55)
+    print(f"▶ 연평균 수익 (CAGR) : {cagr*100:.2f}%")
+    print(f"▶ 최대 낙폭 (MDD)    : {mdd*100:.2f}%")
+    print(f"▶ 샤프 지수 (Sharpe) : {sharpe:.2f}")
+    print("-" * 55)
+    print(f"▶ 총 리밸런싱 횟수   : {total_trades:.0f}회 (연평균 {trades_per_year:.1f}회)")
+    print(f"   [상세] QQQ: {trades_per_asset['QQQ']}회 | TLT: {trades_per_asset['TLT']}회 | GLD: {trades_per_asset['GLD']}회")
+    print("="*55)
+
+    # 8. 차트 시각화
+    plt.figure(figsize=(12, 6))
+    
     plt.subplot(2, 1, 1)
+    plt.plot(cum_returns.index, cum_returns, label='Portfolio (Hybrid)', color='purple')
     plt.title('Cumulative Return (Log Scale)')
     plt.yscale('log')
     plt.grid(True, alpha=0.3)
     plt.legend()
 
     plt.subplot(2, 1, 2)
+    plt.fill_between(drawdown.index, drawdown * 100, 0, color='red', alpha=0.3)
+    plt.plot(drawdown.index, drawdown * 100, color='red', linewidth=1)
     plt.title('Drawdown (%)')
     plt.ylabel('MDD (%)')
     plt.grid(True, alpha=0.3)
-    plt.legend()
 
     plt.tight_layout()
-    plt.savefig('tlt_comparison.png', dpi=150)
-    print("\n[알림] 비교 그래프가 'tlt_comparison.png'로 저장되었습니다.")
+    plt.savefig('backtest_hybrid_result.png', dpi=150)
+    print("\n[알림] 하이브리드 그래프가 'backtest_hybrid_result.png'로 저장되었습니다.")
 
 if __name__ == "__main__":
-    run_tlt_comparison()
+    run_hybrid_backtest()
