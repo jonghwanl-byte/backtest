@@ -3,86 +3,131 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-def run_backtest_v1():
-    print("[Version 1] 절대 모멘텀 필터 백테스트 시작...")
+def run_tlt_comparison():
+    print("TLT 데이터를 다운로드하는 중입니다...")
     
-    # 1. 파라미터 (단기채 SHY를 벤치마크 마크용으로 추가)
-    tickers = ['QQQ', 'TLT', 'GLD', 'SHY']
-    base_weights = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25, 'SHY': 0.00} 
-    mas = [20, 120, 200]
+    # 1. 데이터 다운로드
+    ticker = 'TLT'
+    df = yf.download(ticker, start='2004-01-01', progress=False)
+    
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+        
+    prices = df['Adj Close'] if 'Adj Close' in df.columns else df['Close']
+    prices = prices.dropna()
+    returns = prices.pct_change().dropna()
+    
+    # To-be 신호 강도
     scalar_map = {0: 0.0, 1: 0.50, 2: 0.75, 3: 1.00}
-    
-    # 2. 데이터 다운로드
-    data = pd.DataFrame()
-    for ticker in tickers:
-        df = yf.download(ticker, start='2004-01-01', progress=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        data[ticker] = df['Adj Close'] if 'Adj Close' in df.columns else df['Close']
-            
-    data = data.dropna()
-    returns = data.pct_change().dropna()
+    cash_rate = 0.02 / 252 # 현금 이자 연 2%
 
-    # [핵심 로직 1] SHY(단기채)의 6개월(120일) 수익률 모멘텀 사전 계산
-    shy_price = data['SHY']
-    shy_mom = shy_price / shy_price.shift(120) - 1
+    # 2. 4가지 테스트 시나리오 정의
+    scenarios = [
+        {
+            "name": "기존 (3% 룰)",
+            "up_band": 1.03, "dn_band": 0.97, "mas": [20, 120, 200]
+        },
+        {
+            "name": "대안 A (비대칭: 매수 +3% / 매도 -1%)",
+            "up_band": 1.03, "dn_band": 0.99, "mas": [20, 120, 200]
+        },
+        {
+            "name": "대안 B (1.5% 맞춤형 밴드)",
+            "up_band": 1.015, "dn_band": 0.985, "mas": [20, 120, 200]
+        },
+        {
+            "name": "대안 C (MA 기간 60/120/200, 3% 룰)",
+            "up_band": 1.03, "dn_band": 0.97, "mas": [60, 120, 200]
+        }
+    ]
 
-    portfolio_return = pd.Series(0.0, index=returns.index)
-    asset_weights = pd.DataFrame(index=returns.index, columns=tickers)
+    print("각 시나리오별 백테스트를 계산하는 중입니다...\n")
+    print("="*60)
+    print("   TLT 단독 (100%) 하락장 탈출 전략 비교 백테스트")
+    print("="*60)
 
-    # 3. Hysteresis TAA 로직 적용
-    for ticker in tickers:
-        price = data[ticker]
-        total_signals = pd.Series(0, index=price.index)
+    # 그래프 그리기 준비
+    plt.figure(figsize=(14, 10))
+    colors = ['gray', 'blue', 'green', 'red']
+
+    for idx, sc in enumerate(scenarios):
+        mas = sc["mas"]
+        up_band = sc["up_band"]
+        dn_band = sc["dn_band"]
+        
+        total_signals = pd.Series(0, index=prices.index)
         
         for ma_period in mas:
-            ma = price.rolling(window=ma_period).mean()
-            state = np.zeros(len(price))
-            p_vals = price.values
+            ma = prices.rolling(window=ma_period).mean()
+            state = np.zeros(len(prices))
+            p_vals = prices.values
             m_vals = ma.values
             curr_state = 0
             
             for i in range(len(p_vals)):
-                if np.isnan(m_vals[i]): continue
-                if p_vals[i] > m_vals[i] * 1.03: curr_state = 1
-                elif p_vals[i] < m_vals[i] * 0.97: curr_state = 0
+                if np.isnan(m_vals[i]):
+                    continue
+                # 진입/이탈 조건
+                if p_vals[i] > m_vals[i] * up_band:
+                    curr_state = 1
+                elif p_vals[i] < m_vals[i] * dn_band:
+                    curr_state = 0
                 state[i] = curr_state
+                
             total_signals += state
             
-        # [핵심 로직 2] TLT에만 절대 모멘텀 필터 적용
-        if ticker == 'TLT':
-            tlt_mom = price / price.shift(120) - 1
-            # TLT 모멘텀이 SHY(현금이자)보다 낮으면 점수를 0으로 강제 초기화
-            filter_condition = tlt_mom < shy_mom
-            total_signals = np.where(filter_condition, 0, total_signals)
-            total_signals = pd.Series(total_signals, index=price.index)
-            
-        invested_fraction = total_signals.map(scalar_map)
-        invested_fraction = invested_fraction.shift(1).fillna(0)
+        # 비중 계산
+        invested_fraction = total_signals.map(scalar_map).shift(1).fillna(0)
+        cash_fraction = 1.0 - invested_fraction
         
-        actual_weight = invested_fraction * base_weights[ticker]
-        asset_weights[ticker] = actual_weight
-        portfolio_return += actual_weight * returns[ticker]
+        # 포트폴리오 수익률 = (TLT 수익) + (현금 이자 수익)
+        port_returns = (invested_fraction * returns) + (cash_fraction * cash_rate)
+        
+        # 성과 지표 계산
+        cum_returns = (1 + port_returns).cumprod()
+        years = len(cum_returns) / 252.0
+        cagr = cum_returns.iloc[-1] ** (1 / years) - 1
+        ann_vol = port_returns.std() * np.sqrt(252)
+        sharpe = (port_returns.mean() * 252 - 0.02) / ann_vol
+        
+        roll_max = cum_returns.cummax()
+        drawdown = (cum_returns - roll_max) / roll_max
+        mdd = drawdown.min()
+        
+        # 매매 횟수 계산
+        weight_changes = invested_fraction.diff().fillna(0)
+        total_trades = (weight_changes != 0).sum()
+        trades_per_year = total_trades / years
 
-    # 4. Cash 수익 및 성과 계산
-    total_invested = asset_weights.sum(axis=1)
-    cash_weight = 1.0 - total_invested
-    portfolio_return += cash_weight * (0.02 / 252)
+        # 결과 출력
+        print(f"[{idx+1}] {sc['name']}")
+        print(f"    ▶ CAGR: {cagr*100:.2f}% | MDD: {mdd*100:.2f}% | Sharpe: {sharpe:.2f}")
+        print(f"    ▶ 총 매매 횟수: {total_trades}회 (연평균 {trades_per_year:.1f}회)")
+        print("-" * 60)
 
-    cum_returns = (1 + portfolio_return).cumprod()
-    years = len(cum_returns) / 252.0
-    cagr = cum_returns.iloc[-1] ** (1 / years) - 1
-    ann_vol = portfolio_return.std() * np.sqrt(252)
-    sharpe = (portfolio_return.mean() * 252 - 0.02) / ann_vol
-    mdd = ((cum_returns - cum_returns.cummax()) / cum_returns.cummax()).min()
+        # 그래프 추가
+        plt.subplot(2, 1, 1)
+        plt.plot(cum_returns.index, cum_returns, label=f"{sc['name']} (CAGR {cagr*100:.2f}%)", color=colors[idx], linewidth=1.5 if idx > 0 else 1)
+        
+        plt.subplot(2, 1, 2)
+        plt.plot(drawdown.index, drawdown * 100, label=f"{sc['name']} (MDD {mdd*100:.2f}%)", color=colors[idx], linewidth=1.5 if idx > 0 else 1)
 
-    print("\n" + "="*50)
-    print("   [V1] TLT 절대 모멘텀 필터 적용 백테스트")
-    print("="*50)
-    print(f"▶ 연평균 수익 (CAGR) : {cagr*100:.2f}%")
-    print(f"▶ 최대 낙폭 (MDD)    : {mdd*100:.2f}%")
-    print(f"▶ 샤프 지수 (Sharpe) : {sharpe:.2f}")
-    print("="*50)
+    # 차트 꾸미기
+    plt.subplot(2, 1, 1)
+    plt.title('Cumulative Return (Log Scale)')
+    plt.yscale('log')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+
+    plt.subplot(2, 1, 2)
+    plt.title('Drawdown (%)')
+    plt.ylabel('MDD (%)')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+
+    plt.tight_layout()
+    plt.savefig('tlt_comparison.png', dpi=150)
+    print("\n[알림] 비교 그래프가 'tlt_comparison.png'로 저장되었습니다.")
 
 if __name__ == "__main__":
-    run_backtest_v1()
+    run_tlt_comparison()
