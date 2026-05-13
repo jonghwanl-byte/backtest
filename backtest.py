@@ -5,10 +5,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 def run_tlt_12_combinations():
-    print("GLD 데이터를 다운로드하는 중입니다...")
+    print("QQQ 데이터를 다운로드하는 중입니다...")
     
     # 1. 데이터 다운로드
-    ticker = 'GLD'
+    ticker = 'QQQ'
     df = yf.download(ticker, start='2004-01-01', progress=False)
     
     # yfinance 최신 버전 호환
@@ -42,7 +42,7 @@ def run_tlt_12_combinations():
 
     print("각 시나리오별 백테스트를 계산하는 중입니다...\n")
     print("="*65)
-    print("   GLD 단독 (100%) 비대칭 밴드 12가지 최적화 백테스트")
+    print("   QQQ 단독 (100%) 비대칭 밴드 12가지 최적화 백테스트")
     print("="*65)
 
     # 그래프 그리기 준비 (12개 라인을 위해 tab20 컬러맵 사용)
