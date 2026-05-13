@@ -1,134 +1,133 @@
-
 import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-def run_tlt_12_combinations():
-    print("QQQ 데이터를 다운로드하는 중입니다...")
+def run_comparison_backtest():
+    print("시장 데이터를 안전하게 다운로드하는 중입니다...")
     
-    # 1. 데이터 다운로드
-    ticker = 'QQQ'
-    df = yf.download(ticker, start='2004-01-01', progress=False)
-    
-    # yfinance 최신 버전 호환
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-        
-    prices = df['Adj Close'] if 'Adj Close' in df.columns else df['Close']
-    prices = prices.dropna()
-    returns = prices.pct_change().dropna()
-    
-    # 2. 공통 파라미터 (To-be 신호 강도 적용)
+    tickers = ['QQQ', 'TLT', 'GLD']
+    base_weights = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25}
     mas = [20, 120, 200]
     scalar_map = {0: 0.0, 1: 0.50, 2: 0.75, 3: 1.00}
-    cash_rate = 0.02 / 252 # 현금 이자 연 2%
-
-    # 3. 요청하신 12가지 테스트 시나리오 정의
-    scenarios = [
-        {"name": "01) 매수 +3.0% / 매도 -1.0%", "up_band": 1.030, "dn_band": 0.990},
-        {"name": "02) 매수 +3.0% / 매도 -1.5%", "up_band": 1.030, "dn_band": 0.985},
-        {"name": "03) 매수 +3.0% / 매도 -2.0%", "up_band": 1.030, "dn_band": 0.980},
-        {"name": "04) 매수 +3.0% / 매도 -2.5%", "up_band": 1.030, "dn_band": 0.975},
-        {"name": "05) 매수 +3.0% / 매도 -3.0%", "up_band": 1.030, "dn_band": 0.970},
-        {"name": "06) 매수 +2.5% / 매도 -1.0%", "up_band": 1.025, "dn_band": 0.990},
-        {"name": "07) 매수 +2.5% / 매도 -1.5%", "up_band": 1.025, "dn_band": 0.985},
-        {"name": "08) 매수 +2.5% / 매도 -2.0%", "up_band": 1.025, "dn_band": 0.980},
-        {"name": "09) 매수 +2.5% / 매도 -2.5%", "up_band": 1.025, "dn_band": 0.975},
-        {"name": "10) 매수 +2.0% / 매도 -1.0%", "up_band": 1.020, "dn_band": 0.990},
-        {"name": "11) 매수 +2.0% / 매도 -1.5%", "up_band": 1.020, "dn_band": 0.985},
-        {"name": "12) 매수 +2.0% / 매도 -2.0%", "up_band": 1.020, "dn_band": 0.980}
-    ]
-
-    print("각 시나리오별 백테스트를 계산하는 중입니다...\n")
-    print("="*65)
-    print("   QQQ 단독 (100%) 비대칭 밴드 12가지 최적화 백테스트")
-    print("="*65)
-
-    # 그래프 그리기 준비 (12개 라인을 위해 tab20 컬러맵 사용)
-    plt.figure(figsize=(15, 14))
-    colors = plt.cm.tab20(np.linspace(0, 1, 12))
-
-    for idx, sc in enumerate(scenarios):
-        up_band = sc["up_band"]
-        dn_band = sc["dn_band"]
-        
-        total_signals = pd.Series(0, index=prices.index)
-        
-        for ma_period in mas:
-            ma = prices.rolling(window=ma_period).mean()
-            state = np.zeros(len(prices))
-            p_vals = prices.values
-            m_vals = ma.values
-            curr_state = 0
+    cash_rate = 0.02 / 252  # 현금 이자 연 2%
+    
+    # 데이터 안전하게 개별 다운로드 (MultiIndex 오류 방지)
+    data = pd.DataFrame()
+    for ticker in tickers:
+        df = yf.download(ticker, start='2004-01-01', progress=False)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        data[ticker] = df['Adj Close'] if 'Adj Close' in df.columns else df['Close']
             
-            for i in range(len(p_vals)):
-                if np.isnan(m_vals[i]):
-                    continue
-                # 진입/이탈 조건 (비대칭 밴드)
-                if p_vals[i] > m_vals[i] * up_band:
-                    curr_state = 1
-                elif p_vals[i] < m_vals[i] * dn_band:
-                    curr_state = 0
-                state[i] = curr_state
+    data = data.ffill().dropna()
+    returns = data.pct_change().dropna()
+
+    # 두 가지 시나리오 정의
+    scenarios = {
+        "1) 기존 순정 모델": {
+            'QQQ': (1.030, 0.970),
+            'TLT': (1.030, 0.975),
+            'GLD': (1.030, 0.970)
+        },
+        "2) 궁극의 하이브리드 (QQQ/GLD ±2.5%, TLT +3%/-2.5%)": {
+            'QQQ': (1.025, 0.975),
+            'TLT': (1.030, 0.975),
+            'GLD': (1.025, 0.975)
+        }
+    }
+
+    print("\n포트폴리오 백테스트 시뮬레이션 중...\n")
+    print("="*60)
+    print(" 🥊 순정 모델 vs 궁극의 하이브리드 모델 비교 🥊")
+    print("="*60)
+
+    # 그래프 준비
+    plt.figure(figsize=(14, 10))
+    colors = ['gray', 'purple']
+
+    for idx, (scenario_name, bands) in enumerate(scenarios.items()):
+        portfolio_return = pd.Series(0.0, index=returns.index)
+        asset_weights = pd.DataFrame(index=returns.index, columns=tickers)
+
+        # 전략 로직 적용
+        for ticker in tickers:
+            price = data[ticker]
+            total_signals = pd.Series(0, index=price.index)
+            up_band, dn_band = bands[ticker]
+            
+            for ma_period in mas:
+                ma = price.rolling(window=ma_period).mean()
+                state = np.zeros(len(price))
+                p_vals = price.values
+                m_vals = ma.values
+                curr_state = 0
                 
-            total_signals += state
-            
-        # 비중 계산 (To-be 스칼라맵 적용)
-        invested_fraction = total_signals.map(scalar_map).shift(1).fillna(0)
-        cash_fraction = 1.0 - invested_fraction
-        
-        # 포트폴리오 수익률 = (TLT 수익) + (현금 이자 수익)
-        port_returns = (invested_fraction * returns) + (cash_fraction * cash_rate)
-        
+                for i in range(len(p_vals)):
+                    if np.isnan(m_vals[i]): continue
+                    if p_vals[i] > m_vals[i] * up_band: curr_state = 1
+                    elif p_vals[i] < m_vals[i] * dn_band: curr_state = 0
+                    state[i] = curr_state
+                    
+                total_signals += state
+                
+            invested_fraction = total_signals.map(scalar_map).shift(1).fillna(0)
+            actual_weight = invested_fraction * base_weights[ticker]
+            asset_weights[ticker] = actual_weight
+            portfolio_return += actual_weight * returns[ticker]
+
+        # 현금 이자 반영
+        total_invested = asset_weights.sum(axis=1)
+        cash_weight = 1.0 - total_invested
+        portfolio_return += cash_weight * cash_rate
+
         # 성과 지표 계산
-        cum_returns = (1 + port_returns).cumprod()
+        cum_returns = (1 + portfolio_return).cumprod()
         years = len(cum_returns) / 252.0
+
         cagr = cum_returns.iloc[-1] ** (1 / years) - 1
-        ann_vol = port_returns.std() * np.sqrt(252)
-        sharpe = (port_returns.mean() * 252 - 0.02) / ann_vol
-        
+        ann_vol = portfolio_return.std() * np.sqrt(252)
+        sharpe = (portfolio_return.mean() * 252 - 0.02) / ann_vol
+
         roll_max = cum_returns.cummax()
         drawdown = (cum_returns - roll_max) / roll_max
         mdd = drawdown.min()
-        
+
         # 매매 횟수 계산
-        weight_changes = invested_fraction.diff().fillna(0)
-        total_trades = (weight_changes != 0).sum()
-        trades_per_year = total_trades / years
+        weight_changes = asset_weights.diff().fillna(0)
+        trades_per_asset = (weight_changes != 0).sum()
+        total_trades = trades_per_asset.sum()
 
         # 결과 터미널 출력
-        print(f"[{sc['name']}]")
-        print(f"    ▶ CAGR: {cagr*100:.2f}% | MDD: {mdd*100:.2f}% | Sharpe: {sharpe:.2f}")
-        print(f"    ▶ 총 매매 횟수: {total_trades}회 (연평균 {trades_per_year:.1f}회)")
-        print("-" * 65)
+        print(f"[{scenario_name}]")
+        print(f"  ▶ CAGR: {cagr*100:.2f}% | MDD: {mdd*100:.2f}% | Sharpe: {sharpe:.2f}")
+        print(f"  ▶ 총 리밸런싱: {total_trades:.0f}회 (QQQ {trades_per_asset['QQQ']}, TLT {trades_per_asset['TLT']}, GLD {trades_per_asset['GLD']})")
+        print("-" * 60)
 
-        # 누적 수익률 그래프 추가
+        # 차트 그리기
         plt.subplot(2, 1, 1)
-        plt.plot(cum_returns.index, cum_returns, label=f"{sc['name']} (CAGR {cagr*100:.2f}%)", color=colors[idx], linewidth=1.5)
+        linewidth = 2.0 if idx == 1 else 1.5
+        plt.plot(cum_returns.index, cum_returns, label=f"{scenario_name} (CAGR {cagr*100:.2f}%)", color=colors[idx], linewidth=linewidth)
         
-        # 낙폭(MDD) 그래프 추가
         plt.subplot(2, 1, 2)
-        plt.plot(drawdown.index, drawdown * 100, label=f"{sc['name']} (MDD {mdd*100:.2f}%)", color=colors[idx], linewidth=1.5, alpha=0.8)
+        plt.plot(drawdown.index, drawdown * 100, label=f"{scenario_name} (MDD {mdd*100:.2f}%)", color=colors[idx], linewidth=linewidth, alpha=0.8)
 
     # 차트 꾸미기
     plt.subplot(2, 1, 1)
-    plt.title('Cumulative Return (Log Scale) - 12 Scenarios')
+    plt.title('Cumulative Return Comparison (Log Scale)')
     plt.yscale('log')
     plt.grid(True, alpha=0.3)
-    # 범례 위치를 그래프 밖으로 이동하여 가려지지 않게 처리
-    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize='small')
+    plt.legend()
 
     plt.subplot(2, 1, 2)
-    plt.title('Drawdown (%) - 12 Scenarios')
+    plt.title('Drawdown Comparison (%)')
     plt.ylabel('MDD (%)')
     plt.grid(True, alpha=0.3)
-    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize='small')
+    plt.legend()
 
     plt.tight_layout()
-    plt.savefig('tlt_12_comparison.png', dpi=150)
-    print("\n[알림] 12가지 비교 그래프가 'tlt_12_comparison.png'로 저장되었습니다.")
+    plt.savefig('ultimate_comparison.png', dpi=150)
+    print("\n[알림] 비교 그래프가 'ultimate_comparison.png'로 저장되었습니다.")
 
 if __name__ == "__main__":
-    run_tlt_12_combinations()
-
+    run_comparison_backtest()
