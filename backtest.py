@@ -1,12 +1,11 @@
 
-
 import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
 def run_tlt_12_combinations():
-print("TLT 데이터를 다운로드하는 중입니다...")
+print("GLD 데이터를 다운로드하는 중입니다...")
 
 # 1. 데이터 다운로드
 ticker = 'GLD'
