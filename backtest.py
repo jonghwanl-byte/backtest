@@ -1,137 +1,81 @@
 import yfinance as yf
-import numpy as np
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
-import warnings
-warnings.filterwarnings('ignore')
 
-# 1. 파라미터 설정 (궁극의 하이브리드 모델 기준)
-tickers = ['QQQ', 'TLT', 'GLD']
-base_weights = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25}
-ma_windows = [20, 120, 200]
-scalar_map = {3: 1.0, 2: 0.75, 1: 0.50, 0: 0.0}
+# -----------------------------------
+# 1. 백테스트 기본 설정
+# -----------------------------------
+TICKER = 'MSFT'
+START_DATE = '2020-01-01'
+END_DATE = '2024-01-01'
+THRESHOLDS = [3.0, 2.5, 2.0, 1.5, 1.0] # 이격도 센서 작동 기준치 (%)
 
-# 하이브리드 비대칭 밴드 설정
-bands = {
-    'QQQ': {'upper': 0.025, 'lower': 0.025},
-    'TLT': {'upper': 0.030, 'lower': 0.025},
-    'GLD': {'upper': 0.025, 'lower': 0.025}
-}
+# -----------------------------------
+# 2. 데이터 다운로드 및 이평선 계산
+# -----------------------------------
+print(f"[{TICKER}] 데이터를 다운로드하는 중...")
+data = yf.download(TICKER, start=START_DATE, end=END_DATE)
 
-# 2. 데이터 다운로드 (Adj Close 사용, MultiIndex 방어)
-print("데이터를 다운로드하는 중입니다...")
-data = yf.download(tickers, start="2004-01-01", end="2026-12-31", progress=False)
+# 이동평균선 (5일, 20일, 60일) 계산
+data['MA5'] = data['Close'].rolling(window=5).mean()
+data['MA20'] = data['Close'].rolling(window=20).mean()
+data['MA60'] = data['Close'].rolling(window=60).mean()
 
-if isinstance(data.columns, pd.MultiIndex):
-    if 'Adj Close' in data.columns.levels[0]:
-        df = data['Adj Close'].copy()
-    else:
-        df = data['Close'].copy()
-else:
-    df = data.copy()
+# 결과를 저장할 데이터프레임 생성 및 단순 보유(Buy & Hold) 수익률 기록
+results = pd.DataFrame(index=data.index)
+results['Buy & Hold'] = data['Close'] / data['Close'].iloc[0]
+daily_return = data['Close'].pct_change()
 
-df = df[tickers].dropna()
-
-# 3. 1일 지연 확인형(1-Day Confirmation) 이격도 로직 계산
-ma_states = pd.DataFrame(index=df.index)
-daily_scores = pd.DataFrame(0, index=df.index, columns=tickers)
-
-for ticker in tickers:
-    score_sum = pd.Series(0, index=df.index)
+# -----------------------------------
+# 3. 이격도 임계값별 백테스트 실행
+# -----------------------------------
+for t in THRESHOLDS:
+    # 3개 이평선 각각에 대한 이격도 매수 신호 발생 여부 확인 (True=1, False=0)
+    # 종가가 이동평균선 대비 t% 이상 하락했는지 체크
+    sig5 = (data['Close'] <= data['MA5'] * (1 - (t / 100))).astype(int)
+    sig20 = (data['Close'] <= data['MA20'] * (1 - (t / 100))).astype(int)
+    sig60 = (data['Close'] <= data['MA60'] * (1 - (t / 100))).astype(int)
     
-    upper_band_pct = bands[ticker]['upper']
-    lower_band_pct = bands[ticker]['lower']
+    # 당일 켜진 센서(신호)의 총 개수 합산 (0 ~ 3개)
+    total_signals = sig5 + sig20 + sig60
     
-    for w in ma_windows:
-        ma = df[ticker].rolling(window=w).mean()
-        upper_line = ma * (1 + upper_band_pct)
-        lower_line = ma * (1 - lower_band_pct)
-        
-        # [핵심 로직 변경] 당일의 이격도 돌파/이탈 상태(Condition) 확인
-        # 1: 상단 돌파, -1: 하단 이탈, 0: 밴드 내 위치
-        condition = pd.Series(0, index=df.index)
-        condition[df[ticker] > upper_line] = 1
-        condition[df[ticker] < lower_line] = -1
-        
-        # 어제와 오늘의 Condition 확인 (Shift 사용)
-        yesterday_condition = condition.shift(1)
-        
-        # 상태(State) 기록 로직
-        state = pd.Series(np.nan, index=df.index)
-        
-        # 매수(1.0): 어제도 뚫었고, 오늘도 연속으로 뚫었을 때만
-        buy_signal = (yesterday_condition == 1) & (condition == 1)
-        state[buy_signal] = 1.0
-        
-        # 매도(0.0): 어제도 이탈했고, 오늘도 연속으로 이탈했을 때만
-        sell_signal = (yesterday_condition == -1) & (condition == -1)
-        state[sell_signal] = 0.0
-        
-        # 조건이 충족되지 않은 날은 이전 신호(state)를 그대로 유지 (ffill)
-        state = state.ffill().fillna(0.0)
-        
-        score_sum += state
-        
-    daily_scores[ticker] = score_sum
+    # 신호 개수에 따른 투자 비중(Weight) 할당
+    weights = pd.Series(0.0, index=data.index)
+    weights[total_signals == 3] = 1.0   # 3개 만족: 100% 비중
+    weights[total_signals == 2] = 0.75  # 2개 만족: 75% 비중
+    weights[total_signals == 1] = 0.50  # 1개 만족: 50% 비중
+    weights[total_signals == 0] = 0.0   # 0개 만족: 0% 비중 (전액 현금)
+    
+    # 전략 수익률 계산 
+    # (오늘 확인된 비중 'weights'는 다음 날(shift(1))의 수익률에 반영되어야 미래 참조의 오류를 막을 수 있습니다)
+    strategy_return = weights.shift(1) * daily_return
+    
+    # 전략 누적 수익률 계산 및 저장
+    cumulative_return = (1 + strategy_return.fillna(0)).cumprod()
+    results[f'Threshold {t}%'] = cumulative_return
 
-# 4. 포트폴리오 비중 및 수익률 계산
-scalars = daily_scores.replace(scalar_map)
+# -----------------------------------
+# 4. 결과 시각화
+# -----------------------------------
+plt.figure(figsize=(14, 7))
+plt.plot(results.index, results['Buy & Hold'], label='Buy & Hold (단순 보유)', color='black', linewidth=2, linestyle='--')
 
-target_weights = scalars.copy()
-for ticker in tickers:
-    target_weights[ticker] = scalars[ticker] * base_weights[ticker]
+colors = ['red', 'orange', 'green', 'blue', 'purple']
+for i, t in enumerate(THRESHOLDS):
+    plt.plot(results.index, results[f'Threshold {t}%'], label=f'Threshold {t}% (Dynamic Weight)', color=colors[i], alpha=0.8)
 
-# 실제 매매는 신호 발생 다음 날 종가로 이루어지므로 shift(1) 적용
-actual_weights = target_weights.shift(1).fillna(0)
-actual_weights['Cash'] = 1.0 - actual_weights[tickers].sum(axis=1)
+plt.title(f"{TICKER} 다중 이격도 센서 비중 조절 백테스트 결과 ({START_DATE} ~ {END_DATE})", fontsize=16)
+plt.xlabel("Date", fontsize=12)
+plt.ylabel("Cumulative Return (누적 수익률)", fontsize=12)
+plt.legend(loc='upper left')
+plt.grid(True, alpha=0.3)
+plt.show()
 
-daily_returns = df.pct_change().fillna(0)
-daily_returns['Cash'] = 0.0
-
-port_returns = (actual_weights * daily_returns).sum(axis=1)
-cumulative_returns = (1 + port_returns).cumprod()
-
-# 5. 성과 지표 계산
-total_years = len(df) / 252
-cagr = cumulative_returns.iloc[-1] ** (1 / total_years) - 1
-
-rolling_max = cumulative_returns.cummax()
-drawdown = cumulative_returns / rolling_max - 1
-mdd = drawdown.min()
-
-volatility = port_returns.std() * np.sqrt(252)
-sharpe_ratio = (cagr - 0.02) / volatility if volatility != 0 else 0
-
-# 6. 턴오버(거래 횟수) 계산
-weight_diff = actual_weights[tickers].diff().fillna(0)
-turnover_events = (weight_diff != 0).sum()
-total_turnover = turnover_events.sum()
-annual_turnover = total_turnover / total_years
-
-# 7. 결과 출력
-print("="*50)
-print(" 1-Day Confirmation Hysteresis-TAA Backtest Result ")
-print("="*50)
-print(f"목표 비중    : QQQ {base_weights['QQQ']:.0%}, TLT {base_weights['TLT']:.0%}, GLD {base_weights['GLD']:.0%}")
-print(f"하이브리드 밴드: QQQ ±2.5%, TLT +3.0%/-2.5%, GLD ±2.5%")
-print(f"테스트 기간  : {df.index[0].strftime('%Y-%m-%d')} ~ {df.index[-1].strftime('%Y-%m-%d')}\n")
-
-print(f"▶ 연평균 수익 (CAGR) : {cagr:.2%}")
-print(f"▶ 최대 낙폭 (MDD)    : {mdd:.2%}")
-print(f"▶ 연평균 변동성      : {volatility:.2%}")
-print(f"▶ 샤프 지수 (Sharpe) : {sharpe_ratio:.2f}\n")
-
-print(f"▶ 총 리밸런싱 횟수   : {total_turnover}회 (연평균 {annual_turnover:.1f}회)")
-print(f"   [상세] QQQ: {turnover_events['QQQ']}회 | TLT: {turnover_events['TLT']}회 | GLD: {turnover_events['GLD']}회")
-print("="*50)
-
-# 8. 그래프 저장
-plt.figure(figsize=(12, 6))
-plt.plot(cumulative_returns, label='1-Day Confirmation TAA')
-plt.title('1-Day Confirmation Hysteresis TAA Cumulative Return')
-plt.xlabel('Date')
-plt.ylabel('Cumulative Return')
-plt.legend()
-plt.grid(True)
-plt.savefig('backtest_result.png')
-print("\n[알림] 그래프가 'backtest_result.png'로 저장되었습니다.")
+# -----------------------------------
+# 5. 최종 수익률 요약 출력
+# -----------------------------------
+print("\n[ 최종 누적 수익률 요약 ]")
+for col in results.columns:
+    final_return = (results[col].iloc[-1] - 1) * 100
+    print(f"{col:<25}: {final_return:>8.2f} %")
