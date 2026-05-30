@@ -9,9 +9,10 @@ import matplotlib.pyplot as plt
 TICKERS = ['MSFT', 'NVDA', 'TSM'] 
 START_DATE = '2020-01-01'
 END_DATE = '2024-01-01'
+TRAILING_STOPS = [10.0, 15.0, 20.0] # 고점 대비 하락 청산 임계값 (%)
 
 # -----------------------------------
-# 2. 종목별 거래량 모멘텀 백테스트 실행
+# 2. 종목별 트레일링 스탑 백테스트
 # -----------------------------------
 for TICKER in TICKERS:
     print(f"\n{'='*50}")
@@ -20,81 +21,68 @@ for TICKER in TICKERS:
     
     # 데이터 다운로드 및 전처리
     raw_data = yf.download(TICKER, start=START_DATE, end=END_DATE)
-
     if isinstance(raw_data.columns, pd.MultiIndex):
         raw_data.columns = raw_data.columns.get_level_values(0)
-
+        
     data = pd.DataFrame()
     data['Close'] = raw_data['Close'].squeeze()
-    data['Volume'] = raw_data['Volume'].squeeze()
-
-    # 가격 및 거래량 이동평균선 계산
-    data['MA5'] = data['Close'].rolling(window=5).mean()
-    data['MA20'] = data['Close'].rolling(window=20).mean()
-    data['MA60'] = data['Close'].rolling(window=60).mean()
-    data['Vol_MA20'] = data['Volume'].rolling(window=20).mean()
-
+    daily_return = data['Close'].pct_change()
+    
+    # 결과 저장용 데이터프레임 (단순 보유 수익률 기록)
     results = pd.DataFrame(index=data.index)
     results['Buy & Hold'] = data['Close'] / data['Close'].iloc[0]
-    daily_return = data['Close'].pct_change()
-
-    # -----------------------------------
-    # 3. 수정된 거래량 동반 매수 신호 판별 함수
-    # -----------------------------------
-    def get_flexible_volume_breakout(price, ma, volume, vol_ma):
-        # 1) 상향 돌파: 어제는 이평선 이하, 오늘은 이평선 초과
-        cross_up = (price > ma) & (price.shift(1) <= ma.shift(1))
-        
-        # 2) 거래량 조건 완화: 당일 거래량이 1.2배(20%) 이상 터졌는지 확인
-        vol_condition = volume > (vol_ma * 1.2)
-        
-        # 3) 유예 기간 부여: 최근 3일 이내에 거래량 조건이 한 번이라도 만족되었는지 확인 (Window 적용)
-        vol_surge_window = vol_condition.rolling(window=3).max() == 1
-        
-        # 4) 진짜 돌파 조건 확립 (NaN 값 처리 포함)
-        valid_breakout = cross_up & vol_surge_window.fillna(False)
-        
-        # 5) 하향 이탈: 주가가 다시 이평선 아래로 떨어짐
-        break_down = price < ma
-        
-        # 6) 포지션 상태 저장
-        sig = pd.Series(np.nan, index=price.index)
-        sig.loc[valid_breakout] = 1.0
-        sig.loc[break_down] = 0.0
-        return sig.ffill().fillna(0.0)
-
-    # 각 이평선에 대해 완화된 거래량 동반 신호 계산
-    sig5 = get_flexible_volume_breakout(data['Close'], data['MA5'], data['Volume'], data['Vol_MA20'])
-    sig20 = get_flexible_volume_breakout(data['Close'], data['MA20'], data['Volume'], data['Vol_MA20'])
-    sig60 = get_flexible_volume_breakout(data['Close'], data['MA60'], data['Volume'], data['Vol_MA20'])
     
-    total_signals = sig5 + sig20 + sig60
-    
-    # 신호 개수에 따른 비중 할당
-    weights = pd.Series(0.0, index=data.index)
-    weights[total_signals == 3] = 1.0   
-    weights[total_signals == 2] = 0.75  
-    weights[total_signals == 1] = 0.50  
-    weights[total_signals == 0] = 0.0   
-    
-    # 전략 누적 수익률 계산
-    strategy_return = weights.shift(1) * daily_return
-    results['Flex Volume Momentum'] = (1 + strategy_return.fillna(0)).cumprod()
-
     # -----------------------------------
-    # 4. 최종 결과 출력 및 시각화
+    # 3. 트레일링 스탑 로직 구현
     # -----------------------------------
-    final_bh = (results['Buy & Hold'].iloc[-1] - 1) * 100
-    final_mom = (results['Flex Volume Momentum'].iloc[-1] - 1) * 100
-    
-    print(f"\n[ {TICKER} 최종 누적 수익률 요약 ]")
-    print(f"{'Buy & Hold (단순 보유)':<25}: {final_bh:>8.2f} %")
-    print(f"{'Flex Volume Momentum':<25}: {final_mom:>8.2f} %")
-
+    for ts in TRAILING_STOPS:
+        positions = pd.Series(0.0, index=data.index)
+        hwm = data['Close'].iloc[0] # High Water Mark (최고점 기록 변수)
+        current_pos = 1.0 # 최초 100% 매수 상태로 시작
+        
+        for i in range(len(data)):
+            current_price = data['Close'].iloc[i]
+            
+            if current_pos == 1.0:
+                # [주식 보유 중] 고점 갱신 확인
+                if current_price > hwm:
+                    hwm = current_price
+                # [주식 보유 중] 리스크 관리: 고점 대비 ts% 하락 시 전량 매도
+                elif current_price <= hwm * (1 - (ts / 100)):
+                    current_pos = 0.0 
+            else:
+                # [현금 보유 중] 상승장 재진입: 주가가 이전 최고점을 다시 돌파할 때 매수
+                if current_price > hwm:
+                    current_pos = 1.0
+                    hwm = current_price # 새로운 고점 갱신 시작
+                    
+            positions.iloc[i] = current_pos
+            
+        # 전략 수익률 계산 (미래 참조 방지를 위해 익일 반영)
+        strategy_return = positions.shift(1) * daily_return
+        results[f'Trailing Stop -{ts}%'] = (1 + strategy_return.fillna(0)).cumprod()
+        
+    # -----------------------------------
+    # 4. 결과 시각화
+    # -----------------------------------
     plt.figure(figsize=(14, 7))
-    plt.plot(results.index, results['Buy & Hold'], label='Buy & Hold', color='black', linewidth=2, linestyle='--')
-    plt.plot(results.index, results['Flex Volume Momentum'], label='Flexible Volume Momentum', color='blue', alpha=0.8, linewidth=2)
-    plt.title(f"{TICKER} 거래량 필터 완화 백테스트 결과 ({START_DATE} ~ {END_DATE})", fontsize=16)
+    plt.plot(results.index, results['Buy & Hold'], label='Buy & Hold (단순 보유)', color='black', linewidth=2, linestyle='--')
+    
+    colors = ['blue', 'orange', 'red']
+    for i, ts in enumerate(TRAILING_STOPS):
+        plt.plot(results.index, results[f'Trailing Stop -{ts}%'], label=f'Trailing Stop -{ts}%', color=colors[i], alpha=0.8, linewidth=2)
+        
+    plt.title(f"{TICKER} 트레일링 스탑 백테스트 결과 ({START_DATE} ~ {END_DATE})", fontsize=16)
+    plt.xlabel("Date", fontsize=12)
+    plt.ylabel("Cumulative Return (누적 수익률)", fontsize=12)
     plt.legend(loc='upper left')
     plt.grid(True, alpha=0.3)
     plt.show()
+
+    # -----------------------------------
+    # 5. 최종 수익률 결과 출력
+    # -----------------------------------
+    print(f"\n[ {TICKER} 최종 누적 수익률 요약 ]")
+    for col in results.columns:
+        final_return = (results[col].iloc[-1] - 1) * 100
+        print(f"{col:<25}: {final_return:>8.2f} %")
