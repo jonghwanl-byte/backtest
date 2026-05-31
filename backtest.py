@@ -99,4 +99,23 @@ def run_weight_comparison():
         plt.plot(cum_returns.index, cum_returns, label=f"{scenario_name} (CAGR {cagr*100:.2f}%)", color=colors[idx], linewidth=1.5)
         
         plt.subplot(2, 1, 2)
-        plt.plot(drawdown.index, drawdown * 100, label=f"{scenario_name} (MDD {mdd*100:.2f}%)", color=colors[idx], linewidth=
+        plt.plot(drawdown.index, drawdown * 100, label=f"{scenario_name} (MDD {mdd*100:.2f}%)", color=colors[idx], linewidth=1.5, alpha=0.8)
+
+    plt.subplot(2, 1, 1)
+    plt.title('Cumulative Return Comparison (Log Scale)')
+    plt.yscale('log')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+
+    plt.subplot(2, 1, 2)
+    plt.title('Drawdown Comparison (%)')
+    plt.ylabel('MDD (%)')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+
+    plt.tight_layout()
+    plt.savefig('weight_comparison_60.png', dpi=150)
+    print("\n[알림] 비교 그래프가 'weight_comparison_60.png'로 저장되었습니다.")
+
+if __name__ == "__main__":
+    run_weight_comparison()
