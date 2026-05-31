@@ -3,28 +3,21 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-def run_4asset_hybrid_backtest():
-    print("4개 자산 시장 데이터를 안전하게 다운로드하는 중입니다...")
+def run_60_20_20_backtest():
+    print("시장 데이터를 다운로드하는 중입니다...")
     
-    # 1. 대상 자산 및 목표 비중 설정
-    tickers = ['QQQ', 'TLT', 'IEF', 'GLD']
-    base_weights = {
-        'QQQ': 0.50, 
-        'TLT': 0.125, 
-        'IEF': 0.125, 
-        'GLD': 0.25
-    }
+    # 1. 대상 자산 및 새로운 목표 비중 설정 (QQQ 60%)
+    tickers = ['QQQ', 'TLT', 'GLD']
+    base_weights = {'QQQ': 0.60, 'TLT': 0.20, 'GLD': 0.20}
     
     mas = [20, 120, 200]
     scalar_map = {0: 0.0, 1: 0.50, 2: 0.75, 3: 1.00}
-    cash_rate = 0.02 / 252  # 현금 파킹 시 연 2% 이자 가정
+    cash_rate = 0.02 / 252  # 현금 파킹 시 연 2% 이자
     
     # [최종 진화] 자산별 영점 조준이 끝난 궁극의 밴드 세팅
-    # IEF는 중기 '채권'이므로 TLT와 동일한 룰을 적용합니다.
     bands = {
         'QQQ': (1.025, 0.975),  # 매수 +2.5% / 매도 -2.5%
         'TLT': (1.030, 0.975),  # 매수 +3.0% / 매도 -2.5%
-        'IEF': (1.030, 0.975),  # 매수 +3.0% / 매도 -2.5%
         'GLD': (1.025, 0.975)   # 매수 +2.5% / 매도 -2.5%
     }
     
@@ -36,11 +29,10 @@ def run_4asset_hybrid_backtest():
             df.columns = df.columns.get_level_values(0)
         data[ticker] = df['Adj Close'] if 'Adj Close' in df.columns else df['Close']
             
-    # IEF 상장일(2002년) 이후 데이터가 모두 존재하는 시점부터 맞춤
     data = data.ffill().dropna()
     returns = data.pct_change().dropna()
 
-    print("\n4개 자산 포트폴리오 백테스트 시뮬레이션 중...\n")
+    print("\nQQQ 60% 포트폴리오 백테스트 시뮬레이션 중...\n")
     
     portfolio_return = pd.Series(0.0, index=returns.index)
     asset_weights = pd.DataFrame(index=returns.index, columns=tickers)
@@ -94,11 +86,11 @@ def run_4asset_hybrid_backtest():
     total_trades = trades_per_asset.sum()
     trades_per_year = total_trades / years
 
-    # 7. 결과 출력
+    # 7. 결과 터미널 출력
     print("="*65)
-    print(" 🚀 Ultimate Hybrid 4-Asset (QQQ/TLT/IEF/GLD) 🚀")
+    print(" 🚀 Ultimate Hybrid 3-Asset (QQQ 60 / TLT 20 / GLD 20) 🚀")
     print("="*65)
-    print(f"목표 비중 : QQQ 50%, TLT 12.5%, IEF 12.5%, GLD 25%")
+    print(f"목표 비중 : QQQ 60%, TLT 20%, GLD 20%")
     print(f"테스트기간: {cum_returns.index[0].date()} ~ {cum_returns.index[-1].date()}")
     print("-" * 65)
     print(f"▶ 연평균 수익 (CAGR) : {cagr*100:.2f}%")
@@ -106,14 +98,14 @@ def run_4asset_hybrid_backtest():
     print(f"▶ 샤프 지수 (Sharpe) : {sharpe:.2f}")
     print("-" * 65)
     print(f"▶ 총 리밸런싱 횟수   : {total_trades:.0f}회 (연평균 {trades_per_year:.1f}회)")
-    print(f"   [상세] QQQ: {trades_per_asset['QQQ']} | TLT: {trades_per_asset['TLT']} | IEF: {trades_per_asset['IEF']} | GLD: {trades_per_asset['GLD']}")
+    print(f"   [상세] QQQ: {trades_per_asset['QQQ']} | TLT: {trades_per_asset['TLT']} | GLD: {trades_per_asset['GLD']}")
     print("="*65)
 
     # 8. 차트 시각화
     plt.figure(figsize=(12, 8))
     
     plt.subplot(2, 1, 1)
-    plt.plot(cum_returns.index, cum_returns, label=f"Portfolio (CAGR {cagr*100:.2f}%)", color='purple', linewidth=1.5)
+    plt.plot(cum_returns.index, cum_returns, label=f"Portfolio (CAGR {cagr*100:.2f}%)", color='blue', linewidth=1.5)
     plt.title('Cumulative Return (Log Scale)')
     plt.yscale('log')
     plt.grid(True, alpha=0.3)
@@ -128,8 +120,8 @@ def run_4asset_hybrid_backtest():
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig('portfolio_4asset.png', dpi=150)
-    print("\n[알림] 백테스트 결과 그래프가 'portfolio_4asset.png'로 저장되었습니다.")
+    plt.savefig('portfolio_60_20_20.png', dpi=150)
+    print("\n[알림] 백테스트 결과 그래프가 'portfolio_60_20_20.png'로 저장되었습니다.")
 
 if __name__ == "__main__":
-    run_4asset_hybrid_backtest()
+    run_60_20_20_backtest()
