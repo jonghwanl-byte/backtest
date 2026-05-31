@@ -3,25 +3,21 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-def run_60_20_20_backtest():
+def run_weight_comparison():
     print("시장 데이터를 다운로드하는 중입니다...")
     
-    # 1. 대상 자산 및 새로운 목표 비중 설정 (QQQ 60%)
     tickers = ['QQQ', 'TLT', 'GLD']
-    base_weights = {'QQQ': 0.60, 'TLT': 0.20, 'GLD': 0.20}
-    
     mas = [20, 120, 200]
     scalar_map = {0: 0.0, 1: 0.50, 2: 0.75, 3: 1.00}
-    cash_rate = 0.02 / 252  # 현금 파킹 시 연 2% 이자
+    cash_rate = 0.02 / 252  
     
     # [최종 진화] 자산별 영점 조준이 끝난 궁극의 밴드 세팅
     bands = {
-        'QQQ': (1.025, 0.975),  # 매수 +2.5% / 매도 -2.5%
-        'TLT': (1.030, 0.975),  # 매수 +3.0% / 매도 -2.5%
-        'GLD': (1.025, 0.975)   # 매수 +2.5% / 매도 -2.5%
+        'QQQ': (1.025, 0.975),
+        'TLT': (1.030, 0.975),
+        'GLD': (1.025, 0.975)
     }
     
-    # 2. 데이터 안전하게 개별 다운로드
     data = pd.DataFrame()
     for ticker in tickers:
         df = yf.download(ticker, start='2004-01-01', progress=False)
@@ -32,96 +28,75 @@ def run_60_20_20_backtest():
     data = data.ffill().dropna()
     returns = data.pct_change().dropna()
 
-    print("\nQQQ 60% 포트폴리오 백테스트 시뮬레이션 중...\n")
-    
-    portfolio_return = pd.Series(0.0, index=returns.index)
-    asset_weights = pd.DataFrame(index=returns.index, columns=tickers)
+    # 두 가지 비중 시나리오 정의
+    scenarios = {
+        "1) 60 / 15 / 25 (금 비중 높임)": {'QQQ': 0.60, 'TLT': 0.15, 'GLD': 0.25},
+        "2) 60 / 25 / 15 (채권 비중 높임)": {'QQQ': 0.60, 'TLT': 0.25, 'GLD': 0.15}
+    }
 
-    # 3. Hysteresis TAA 로직 적용
-    for ticker in tickers:
-        price = data[ticker]
-        total_signals = pd.Series(0, index=price.index)
-        up_band, dn_band = bands[ticker]
-        
-        for ma_period in mas:
-            ma = price.rolling(window=ma_period).mean()
-            state = np.zeros(len(price))
-            p_vals = price.values
-            m_vals = ma.values
-            curr_state = 0
+    print("\n비중 비교 백테스트 시뮬레이션 중...\n")
+    print("="*65)
+    print(" ⚖️ QQQ 60% 상태에서 TLT vs GLD 방어력 비교 ⚖️")
+    print("="*65)
+
+    plt.figure(figsize=(14, 10))
+    colors = ['blue', 'green']
+
+    for idx, (scenario_name, base_weights) in enumerate(scenarios.items()):
+        portfolio_return = pd.Series(0.0, index=returns.index)
+        asset_weights = pd.DataFrame(index=returns.index, columns=tickers)
+
+        for ticker in tickers:
+            price = data[ticker]
+            total_signals = pd.Series(0, index=price.index)
+            up_band, dn_band = bands[ticker]
             
-            for i in range(len(p_vals)):
-                if np.isnan(m_vals[i]): continue
-                if p_vals[i] > m_vals[i] * up_band: curr_state = 1
-                elif p_vals[i] < m_vals[i] * dn_band: curr_state = 0
-                state[i] = curr_state
+            for ma_period in mas:
+                ma = price.rolling(window=ma_period).mean()
+                state = np.zeros(len(price))
+                p_vals = price.values
+                m_vals = ma.values
+                curr_state = 0
                 
-            total_signals += state
-            
-        invested_fraction = total_signals.map(scalar_map).shift(1).fillna(0)
-        actual_weight = invested_fraction * base_weights[ticker]
-        asset_weights[ticker] = actual_weight
-        portfolio_return += actual_weight * returns[ticker]
+                for i in range(len(p_vals)):
+                    if np.isnan(m_vals[i]): continue
+                    if p_vals[i] > m_vals[i] * up_band: curr_state = 1
+                    elif p_vals[i] < m_vals[i] * dn_band: curr_state = 0
+                    state[i] = curr_state
+                    
+                total_signals += state
+                
+            invested_fraction = total_signals.map(scalar_map).shift(1).fillna(0)
+            actual_weight = invested_fraction * base_weights[ticker]
+            asset_weights[ticker] = actual_weight
+            portfolio_return += actual_weight * returns[ticker]
 
-    # 4. 현금(Cash) 비중에 대한 이자 수익
-    total_invested = asset_weights.sum(axis=1)
-    cash_weight = 1.0 - total_invested
-    portfolio_return += cash_weight * cash_rate
+        total_invested = asset_weights.sum(axis=1)
+        cash_weight = 1.0 - total_invested
+        portfolio_return += cash_weight * cash_rate
 
-    # 5. 성과 지표 계산
-    cum_returns = (1 + portfolio_return).cumprod()
-    years = len(cum_returns) / 252.0
+        cum_returns = (1 + portfolio_return).cumprod()
+        years = len(cum_returns) / 252.0
 
-    cagr = cum_returns.iloc[-1] ** (1 / years) - 1
-    ann_vol = portfolio_return.std() * np.sqrt(252)
-    sharpe = (portfolio_return.mean() * 252 - 0.02) / ann_vol
+        cagr = cum_returns.iloc[-1] ** (1 / years) - 1
+        ann_vol = portfolio_return.std() * np.sqrt(252)
+        sharpe = (portfolio_return.mean() * 252 - 0.02) / ann_vol
 
-    roll_max = cum_returns.cummax()
-    drawdown = (cum_returns - roll_max) / roll_max
-    mdd = drawdown.min()
+        roll_max = cum_returns.cummax()
+        drawdown = (cum_returns - roll_max) / roll_max
+        mdd = drawdown.min()
 
-    # 6. 매매 횟수 계산
-    weight_changes = asset_weights.diff().fillna(0)
-    trades_per_asset = (weight_changes != 0).sum()
-    total_trades = trades_per_asset.sum()
-    trades_per_year = total_trades / years
+        weight_changes = asset_weights.diff().fillna(0)
+        trades_per_asset = (weight_changes != 0).sum()
+        total_trades = trades_per_asset.sum()
 
-    # 7. 결과 터미널 출력
-    print("="*65)
-    print(" 🚀 Ultimate Hybrid 3-Asset (QQQ 60 / TLT 20 / GLD 20) 🚀")
-    print("="*65)
-    print(f"목표 비중 : QQQ 60%, TLT 20%, GLD 20%")
-    print(f"테스트기간: {cum_returns.index[0].date()} ~ {cum_returns.index[-1].date()}")
-    print("-" * 65)
-    print(f"▶ 연평균 수익 (CAGR) : {cagr*100:.2f}%")
-    print(f"▶ 최대 낙폭 (MDD)    : {mdd*100:.2f}%")
-    print(f"▶ 샤프 지수 (Sharpe) : {sharpe:.2f}")
-    print("-" * 65)
-    print(f"▶ 총 리밸런싱 횟수   : {total_trades:.0f}회 (연평균 {trades_per_year:.1f}회)")
-    print(f"   [상세] QQQ: {trades_per_asset['QQQ']} | TLT: {trades_per_asset['TLT']} | GLD: {trades_per_asset['GLD']}")
-    print("="*65)
+        print(f"[{scenario_name}]")
+        print(f"  ▶ CAGR: {cagr*100:.2f}% | MDD: {mdd*100:.2f}% | Sharpe: {sharpe:.2f}")
+        print(f"  ▶ 총 리밸런싱: {total_trades:.0f}회 (QQQ {trades_per_asset['QQQ']}, TLT {trades_per_asset['TLT']}, GLD {trades_per_asset['GLD']})")
+        print("-" * 65)
 
-    # 8. 차트 시각화
-    plt.figure(figsize=(12, 8))
-    
-    plt.subplot(2, 1, 1)
-    plt.plot(cum_returns.index, cum_returns, label=f"Portfolio (CAGR {cagr*100:.2f}%)", color='blue', linewidth=1.5)
-    plt.title('Cumulative Return (Log Scale)')
-    plt.yscale('log')
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    
-    plt.subplot(2, 1, 2)
-    plt.fill_between(drawdown.index, drawdown * 100, 0, color='red', alpha=0.3)
-    plt.plot(drawdown.index, drawdown * 100, label=f"MDD {mdd*100:.2f}%", color='red', linewidth=1)
-    plt.title('Drawdown (%)')
-    plt.ylabel('MDD (%)')
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-
-    plt.tight_layout()
-    plt.savefig('portfolio_60_20_20.png', dpi=150)
-    print("\n[알림] 백테스트 결과 그래프가 'portfolio_60_20_20.png'로 저장되었습니다.")
-
-if __name__ == "__main__":
-    run_60_20_20_backtest()
+        plt.subplot(2, 1, 1)
+        plt.plot(cum_returns.index, cum_returns, label=f"{scenario_name} (CAGR {cagr*100:.2f}%)", color=colors[idx], linewidth=1.5)
+        
+        plt.subplot(2, 1, 2)
+        plt.plot(drawdown.index, drawdown * 100, label=f"{scenario_name} (MDD {mdd*100:.2f}%)", color=colors[idx], linewidth=
