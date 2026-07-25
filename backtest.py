@@ -90,8 +90,8 @@ if __name__ == "__main__":
     print(">>> 야후 파이낸스에서 시장 데이터 다운로드 중...")
     all_tickers = list(set(TICKERS_CURRENT + TICKERS_MODIFIED))
     
-    # 넉넉한 백테스트 기간 확보 (약 5년)
-    data = yf.download(all_tickers, period="5y", progress=False)['Close']
+    # 넉넉한 백테스트 기간 확보
+    data = yf.download(all_tickers, period="max", progress=False)['Close']
     data = data.ffill().dropna()
 
     print(">>> 백테스트 계산 중...\n")
