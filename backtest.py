@@ -9,7 +9,7 @@ import sys
 # ==========================================
 TICKERS = ['QQQ', 'TLT', 'GLD']
 # WEIGHTS = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25}
-WEIGHTS = {'QQQ': 0.80, 'TLT': 0.10, 'GLD': 0.10}
+WEIGHTS = {'QQQ': 1.00, 'TLT': 0.00, 'GLD': 0.00}
 MA_WINDOWS = [20, 120, 200]
 SCALAR_MAP = {3: 1.0, 2: 0.75, 1: 0.50, 0: 0.0}
 
