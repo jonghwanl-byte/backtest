@@ -8,8 +8,8 @@ import sys
 # [1. 파라미터 및 729가지 밴드 조합 설정]
 # ==========================================
 TICKERS = ['QQQ', 'TLT', 'GLD']
-WEIGHTS = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25}
-# WEIGHTS = {'QQQ': 0.60, 'TLT': 0.20, 'GLD': 0.20}
+# WEIGHTS = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25}
+WEIGHTS = {'QQQ': 0.60, 'TLT': 0.20, 'GLD': 0.20}
 MA_WINDOWS = [20, 120, 200]
 SCALAR_MAP = {3: 1.0, 2: 0.75, 1: 0.50, 0: 0.0}
 
@@ -136,7 +136,7 @@ df_results = pd.DataFrame(results)
 df_sorted = df_results.sort_values(by='Sharpe', ascending=False).head(10)
 
 print("\n" + "="*80)
-print("🏆 [Top 10 포트폴리오 최적 밴드 조합] (현금 연 2.5% 이자 반영, 샤프지수 기준)")
+print("🏆 [Top 10 포트폴리오 최적 밴드 조합] (현금 연 2.0% 이자 반영, 샤프지수 기준)")
 print("="*80)
 
 # 터미널 가독성을 높이기 위한 포맷터 적용
