@@ -8,8 +8,8 @@ import sys
 # [1. 파라미터 및 729가지 밴드 조합 설정]
 # ==========================================
 TICKERS = ['QQQ', 'TLT', 'GLD']
-# WEIGHTS = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25}
-WEIGHTS = {'QQQ': 0.40, 'TLT': 0.30, 'GLD': 0.30}
+WEIGHTS = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25}
+# WEIGHTS = {'QQQ': 0.40, 'TLT': 0.30, 'GLD': 0.30}
 MA_WINDOWS = [20, 120, 200]
 SCALAR_MAP = {3: 1.0, 2: 0.75, 1: 0.50, 0: 0.0}
 
@@ -28,7 +28,7 @@ BANDS_LIST = [
 # [2. 데이터 다운로드 (최대 기간)]
 # ==========================================
 print(">>> 야후 파이낸스 데이터 다운로드 중 (period='max')...")
-data_full = yf.download(TICKERS, period="max", progress=False)
+data_full = yf.download(TICKERS, period="10Y", progress=False)
 
 if data_full.empty:
     print("데이터 다운로드 실패")
