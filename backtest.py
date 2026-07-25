@@ -1,196 +1,127 @@
 import yfinance as yf
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import sys
 
-# ==========================================
-# [1. 전략 파라미터 설정]
-# ==========================================
-TICKERS_BASE = ['QQQ', 'TLT', 'GLD']
-TICKER_ALT = 'DIA'
-ALL_TICKERS = TICKERS_BASE + [TICKER_ALT]
+# Define parameters
+TICKERS_CURRENT = ['QQQ', 'TLT', 'GLD']
+WEIGHTS_CURRENT = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25}
+BANDS_CURRENT = {'QQQ': (1.025, 0.975), 'TLT': (1.030, 0.975), 'GLD': (1.025, 0.975)}
 
-BASE_WEIGHTS = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25}
+TICKERS_JD = ['QQQ', 'SPY', 'DIA', 'GLD', 'TLT', 'FBTC', 'RUM', 'OILK']
+WEIGHTS_JD = {'QQQ': 0.24, 'SPY': 0.24, 'DIA': 0.24, 'GLD': 0.06, 'TLT': 0.06, 'FBTC': 0.06, 'RUM': 0.06, 'OILK': 0.02}
+CASH_JD = 0.02
+BANDS_JD = {
+    'QQQ': (1.025, 0.975),
+    'TLT': (1.030, 0.975),
+    'GLD': (1.025, 0.975),
+    'SPY': (1.03, 0.97),
+    'DIA': (1.03, 0.97),
+    'FBTC': (1.03, 0.97),
+    'RUM': (1.03, 0.97),
+    'OILK': (1.03, 0.97)
+}
+
 MA_WINDOWS = [20, 120, 200]
 SCALAR_MAP = {3: 1.0, 2: 0.75, 1: 0.50, 0: 0.0}
 
-BANDS = {
-    'QQQ': (1.025, 0.975),  # 매수 +2.5% / 매도 -2.5%
-    'TLT': (1.030, 0.975),  # 매수 +3.0% / 매도 -2.5%
-    'GLD': (1.025, 0.975),  # 매수 +2.5% / 매도 -2.5%
-    'DIA': (1.030, 0.970)   # 매수 +3.0% / 매도 -3.0%
-}
+# Download Data
+all_tickers = list(set(TICKERS_CURRENT + TICKERS_JD))
+# FBTC inception is Jan 2024. RUM is Sep 2022. 
+# We will use BTC-USD as a proxy for FBTC prior to 2024 to get a meaningful backtest, 
+# otherwise the backtest is only from Oct 2024 (200 days after Jan 2024).
+proxy_tickers = all_tickers.copy()
+if 'FBTC' in proxy_tickers:
+    proxy_tickers.remove('FBTC')
+    proxy_tickers.append('BTC-USD')
 
-# ==========================================
-# [2. 데이터 다운로드 및 전처리]
-# ==========================================
-print("... 최신 시장 데이터 다운로드 중 (QQQ, TLT, GLD, DIA) ...")
-try:
-    data = yf.download(ALL_TICKERS, start="2004-01-01", progress=False)
+data = yf.download(proxy_tickers, period="5y", progress=False)['Close']
+data.rename(columns={'BTC-USD': 'FBTC'}, inplace=True, errors='ignore')
+data = data.ffill().dropna(how='all')
+
+def run_backtest(tickers, base_weights, bands, cash_weight=0.0):
+    prices = data[tickers].dropna()
+    if len(prices) == 0:
+        return None
     
-    if isinstance(data.columns, pd.MultiIndex):
-        if 'Adj Close' in data.columns.get_level_values(0):
-            prices_df = data['Adj Close'].ffill().dropna()
-        else:
-            prices_df = data['Close'].ffill().dropna()
-    else:
-        prices_df = data.ffill().dropna()
+    # Calculate MAs and bands
+    states = {}
+    for ticker in tickers:
+        up_mult, dn_mult = bands[ticker]
+        states[ticker] = {}
+        for w in MA_WINDOWS:
+            ma = prices[ticker].rolling(window=w).mean()
+            upper = ma * up_mult
+            lower = ma * dn_mult
+            
+            # Vectorized state calculation (simplified for backtest: close vs bands)
+            # 1 if price > upper, 0 if price < lower, else previous state
+            cond_up = prices[ticker] > upper
+            cond_dn = prices[ticker] < lower
+            
+            state_series = pd.Series(np.nan, index=prices.index)
+            state_series[cond_up] = 1.0
+            state_series[cond_dn] = 0.0
+            state_series = state_series.ffill().fillna(0.0) # default 0 before crossing
+            
+            states[ticker][w] = state_series
+            
+    # Calculate score
+    portfolio_daily_return = pd.Series(0.0, index=prices.index)
+    daily_returns = prices.pct_change().shift(-1) # return from today close to tomorrow close
+    
+    # Start backtest after 200 days
+    start_idx = MA_WINDOWS[-1]
+    
+    equity_curve = [1.0]
+    
+    for i in range(start_idx, len(prices)-1):
+        total_weight = 0.0
+        port_ret = 0.0
         
-except Exception as e:
-    print(f"데이터 다운로드 실패: {e}")
-    sys.exit(1)
-
-# ==========================================
-# [3. 이동평균 및 Hysteresis 밴드 계산]
-# ==========================================
-ma_lines = {}
-upper_bands = {}
-lower_bands = {}
-
-for ticker in ALL_TICKERS:
-    up_mult, dn_mult = BANDS[ticker]
-    for window in MA_WINDOWS:
-        ma_key = f"{ticker}_{window}"
-        ma = prices_df[ticker].rolling(window=window).mean()
-        ma_lines[ma_key] = ma
-        upper_bands[ma_key] = ma * up_mult
-        lower_bands[ma_key] = ma * dn_mult
-
-# ==========================================
-# [4. Hysteresis 로직 (신호 스칼라 추출)]
-# ==========================================
-print("... 신호 스칼라 판별 중 ...")
-scalars = pd.DataFrame(0.0, index=prices_df.index, columns=ALL_TICKERS)
-current_states = {f"{ticker}_{window}": 0.0 for ticker in ALL_TICKERS for window in MA_WINDOWS}
-
-start_idx = max(MA_WINDOWS)
-
-for i in range(start_idx, len(prices_df)):
-    today_scores = {}
-    for ticker in ALL_TICKERS:
-        score = 0
-        for window in MA_WINDOWS:
-            ma_key = f"{ticker}_{window}"
-            prev_state = current_states[ma_key]
+        for ticker in tickers:
+            score = 0
+            for w in MA_WINDOWS:
+                score += states[ticker][w].iloc[i]
             
-            price = prices_df[ticker].iloc[i]
-            upper = upper_bands[ma_key].iloc[i]
-            lower = lower_bands[ma_key].iloc[i]
+            scalar = SCALAR_MAP.get(score, 0.0)
+            target_w = base_weights[ticker] * scalar
             
-            if pd.isna(upper):
-                new_state = 0.0
-            elif prev_state == 1.0:
-                new_state = 1.0 if price >= lower else 0.0
-            else:
-                new_state = 1.0 if price > upper else 0.0
-                
-            current_states[ma_key] = new_state
-            score += int(new_state)
+            ret = daily_returns[ticker].iloc[i]
+            port_ret += target_w * ret
+            total_weight += target_w
             
-        today_scores[ticker] = score
+        # Add cash return (assume 0% for simplicity)
+        cash_alloc = (1.0 - total_weight - cash_weight) + cash_weight
+        # no return on cash
         
-    for ticker in ALL_TICKERS:
-        scalars.loc[prices_df.index[i], ticker] = SCALAR_MAP[today_scores[ticker]]
+        equity_curve.append(equity_curve[-1] * (1 + port_ret))
+        
+    dates = prices.index[start_idx:len(prices)]
+    eq_df = pd.DataFrame({'Equity': equity_curve}, index=dates)
+    return eq_df
 
-# ==========================================
-# [5. 포트폴리오 모델 모델링 (Model A vs Model B)]
-# ==========================================
-# Model A: 오리지널 하이브리드 (나머지는 현금)
-weights_A = pd.DataFrame(0.0, index=prices_df.index, columns=TICKERS_BASE + ['CASH'])
-weights_A['QQQ'] = BASE_WEIGHTS['QQQ'] * scalars['QQQ']
-weights_A['TLT'] = BASE_WEIGHTS['TLT'] * scalars['TLT']
-weights_A['GLD'] = BASE_WEIGHTS['GLD'] * scalars['GLD']
-weights_A['CASH'] = 1.0 - (weights_A['QQQ'] + weights_A['TLT'] + weights_A['GLD'])
+eq_current = run_backtest(TICKERS_CURRENT, WEIGHTS_CURRENT, BANDS_CURRENT, cash_weight=0.0)
+eq_jd = run_backtest(TICKERS_JD, WEIGHTS_JD, BANDS_JD, cash_weight=CASH_JD)
 
-# Model B: DIA 대체 투입 하이브리드
-weights_B = pd.DataFrame(0.0, index=prices_df.index, columns=ALL_TICKERS + ['CASH'])
-weights_B['QQQ'] = BASE_WEIGHTS['QQQ'] * scalars['QQQ']
-weights_B['TLT'] = BASE_WEIGHTS['TLT'] * scalars['TLT']
-weights_B['GLD'] = BASE_WEIGHTS['GLD'] * scalars['GLD']
+def get_metrics(eq_series):
+    eq = eq_series['Equity']
+    years = (eq.index[-1] - eq.index[0]).days / 365.25
+    cagr = (eq.iloc[-1] / eq.iloc[0]) ** (1 / years) - 1
+    
+    daily_ret = eq.pct_change().dropna()
+    vol = daily_ret.std() * np.sqrt(252)
+    sharpe = (cagr - 0.02) / vol if vol != 0 else 0
+    
+    roll_max = eq.cummax()
+    drawdown = eq / roll_max - 1
+    mdd = drawdown.min()
+    
+    return cagr, mdd, sharpe
 
-base_cash = 1.0 - (weights_B['QQQ'] + weights_B['TLT'] + weights_B['GLD'])
-weights_B['DIA'] = base_cash * scalars['DIA']
-weights_B['CASH'] = base_cash * (1.0 - scalars['DIA'])
-
-# ==========================================
-# [6. 수익률 계산 및 성과 지표 산출]
-# ==========================================
-daily_returns = prices_df.pct_change().fillna(0)
-daily_returns['CASH'] = 0.0  # 보수적으로 현금 이자 0% 가정
-
-# 수익률 시계열 (Look-ahead 방지를 위해 Shift(1) 적용)
-ret_A = (weights_A.shift(1) * daily_returns[weights_A.columns]).sum(axis=1).iloc[start_idx:]
-ret_B = (weights_B.shift(1) * daily_returns[weights_B.columns]).sum(axis=1).iloc[start_idx:]
-
-cum_A = (1 + ret_A).cumprod()
-cum_B = (1 + ret_B).cumprod()
-
-dd_A = (cum_A / cum_A.cummax()) - 1.0
-dd_B = (cum_B / cum_B.cummax()) - 1.0
-
-days = len(ret_A)
-years = days / 252
-
-# 모델 A 지표
-cagr_A = (cum_A.iloc[-1] ** (1 / years)) - 1
-mdd_A = dd_A.min()
-vol_A = ret_A.std() * np.sqrt(252)
-sharpe_A = cagr_A / vol_A if vol_A != 0 else 0
-turnover_A = (weights_A.diff().abs().sum(axis=1) > 0.001).sum()
-
-# 모델 B 지표
-cagr_B = (cum_B.iloc[-1] ** (1 / years)) - 1
-mdd_B = dd_B.min()
-vol_B = ret_B.std() * np.sqrt(252)
-sharpe_B = cagr_B / vol_B if vol_B != 0 else 0
-turnover_B = (weights_B.diff().abs().sum(axis=1) > 0.001).sum()
-
-# ==========================================
-# [7. 결과 출력 및 차트 생성]
-# ==========================================
-print("\n" + "="*50)
-print(" 🚀 A/B Model Comparison Backtest")
-print("="*50)
-print(f"테스트 기간: {ret_A.index[0].strftime('%Y-%m-%d')} ~ {ret_A.index[-1].strftime('%Y-%m-%d')}\n")
-
-print("[Model A] 순정 하이브리드 (QQQ 50 / TLT 25 / GLD 25 -> 잔여 현금)")
-print(f"▶ CAGR   : {cagr_A*100:.2f}%")
-print(f"▶ MDD    : {mdd_A*100:.2f}%")
-print(f"▶ Sharpe : {sharpe_A:.2f}")
-print(f"▶ Turnover: {turnover_A}회\n")
-
-print("[Model B] DIA 대체 투입 (잔여 현금 -> DIA 우선 투입)")
-print(f"▶ CAGR   : {cagr_B*100:.2f}%")
-print(f"▶ MDD    : {mdd_B*100:.2f}%")
-print(f"▶ Sharpe : {sharpe_B:.2f}")
-print(f"▶ Turnover: {turnover_B}회")
-print("="*50)
-
-# 차트 그리기
-plt.figure(figsize=(14, 10))
-
-# 1. 누적 수익률 비교
-plt.subplot(2, 1, 1)
-plt.plot(cum_A.index, cum_A * 100, label=f'Model A (Base) CAGR {cagr_A*100:.2f}%', color='blue')
-plt.plot(cum_B.index, cum_B * 100, label=f'Model B (DIA Alt) CAGR {cagr_B*100:.2f}%', color='green')
-plt.yscale('log')
-plt.title('Cumulative Returns Comparison (Log Scale)')
-plt.ylabel('Return (%)')
-plt.legend()
-plt.grid(True, alpha=0.3)
-
-# 2. MDD 비교
-plt.subplot(2, 1, 2)
-plt.plot(dd_A.index, dd_A * 100, label=f'Model A MDD {mdd_A*100:.2f}%', color='blue', alpha=0.6)
-plt.plot(dd_B.index, dd_B * 100, label=f'Model B MDD {mdd_B*100:.2f}%', color='green', alpha=0.6)
-plt.fill_between(dd_A.index, dd_A * 100, 0, color='blue', alpha=0.1)
-plt.fill_between(dd_B.index, dd_B * 100, 0, color='green', alpha=0.1)
-plt.title('Drawdown Comparison')
-plt.ylabel('Drawdown (%)')
-plt.legend()
-plt.grid(True, alpha=0.3)
-
-plt.tight_layout()
-plt.savefig('compare_dia_vs_base.png')
-print("\n[알림] 차트가 'compare_dia_vs_base.png' 파일로 저장되었습니다.")
+if eq_current is not None and eq_jd is not None:
+    cagr_c, mdd_c, sh_c = get_metrics(eq_current)
+    cagr_j, mdd_j, sh_j = get_metrics(eq_jd)
+    print(f"Current: CAGR={cagr_c:.2%}, MDD={mdd_c:.2%}, Sharpe={sh_c:.2f}")
+    print(f"JD Vance: CAGR={cagr_j:.2%}, MDD={mdd_j:.2%}, Sharpe={sh_j:.2f}")
+else:
+    print("Not enough data to run backtest.")
