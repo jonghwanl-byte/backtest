@@ -7,9 +7,9 @@ import sys
 # ==========================================
 # [1. 파라미터 및 729가지 밴드 조합 설정]
 # ==========================================
-TICKERS = ['SPY', 'TLT', 'GLD']
-# WEIGHTS = {'SPY': 0.50, 'TLT': 0.25, 'GLD': 0.25}
-WEIGHTS = {'SPY': 0.80, 'TLT': 0.10, 'GLD': 0.10}
+TICKERS = ['QQQ', 'TLT', 'GLD']
+# WEIGHTS = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25}
+WEIGHTS = {'QQQ': 0.40, 'TLT': 0.30, 'GLD': 0.30}
 MA_WINDOWS = [20, 120, 200]
 SCALAR_MAP = {3: 1.0, 2: 0.75, 1: 0.50, 0: 0.0}
 
@@ -87,10 +87,10 @@ results = []
 start_idx = MA_WINDOWS[-1] # 200일선 계산을 위한 초기 워밍업 기간 제외
 
 # itertools.product를 사용하여 9 x 9 x 9 = 729가지 조합 순회
-for SPY_band, tlt_band, gld_band in itertools.product(BANDS_LIST, BANDS_LIST, BANDS_LIST):
+for qqq_band, tlt_band, gld_band in itertools.product(BANDS_LIST, BANDS_LIST, BANDS_LIST):
     
     # 1. 포트폴리오에 투자된 총 비중 계산
-    total_invested_weight = (asset_band_weights['SPY'][SPY_band] + 
+    total_invested_weight = (asset_band_weights['QQQ'][qqq_band] + 
                              asset_band_weights['TLT'][tlt_band] + 
                              asset_band_weights['GLD'][gld_band])
     
@@ -98,7 +98,7 @@ for SPY_band, tlt_band, gld_band in itertools.product(BANDS_LIST, BANDS_LIST, BA
     cash_weight = 1.0 - total_invested_weight
     
     # 3. 자산 기여 수익률 합산 + 현금 이자 수익 합산
-    port_ret = (asset_band_returns['SPY'][SPY_band] + 
+    port_ret = (asset_band_returns['QQQ'][qqq_band] + 
                 asset_band_returns['TLT'][tlt_band] + 
                 asset_band_returns['GLD'][gld_band] + 
                 (cash_weight * DAILY_CASH_RETURN))
@@ -119,7 +119,7 @@ for SPY_band, tlt_band, gld_band in itertools.product(BANDS_LIST, BANDS_LIST, BA
     
     # 결과 저장
     results.append({
-        'SPY_Band': f"+{SPY_band[0]-1:.1%}/-{1-SPY_band[1]:.1%}",
+        'QQQ_Band': f"+{qqq_band[0]-1:.1%}/-{1-qqq_band[1]:.1%}",
         'TLT_Band': f"+{tlt_band[0]-1:.1%}/-{1-tlt_band[1]:.1%}",
         'GLD_Band': f"+{gld_band[0]-1:.1%}/-{1-gld_band[1]:.1%}",
         'CAGR': cagr,
