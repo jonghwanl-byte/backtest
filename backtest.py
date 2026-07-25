@@ -1,42 +1,53 @@
 import yfinance as yf
-import numpy as np
 import pandas as pd
+import numpy as np
+import itertools
+import sys
 
 # ==========================================
-# [1. 전략 파라미터 설정]
+# [1. 파라미터 및 729가지 밴드 조합 설정]
 # ==========================================
-# 현재 포트폴리오
-TICKERS_CURRENT = ['QQQ', 'TLT', 'GLD']
-WEIGHTS_CURRENT = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25}
-BANDS_CURRENT = {'QQQ': (1.025, 0.975), 'TLT': (1.030, 0.975), 'GLD': (1.025, 0.975)}
-
-# 수정 포트폴리오 (주식 75%, 안전자산 25%)
-TICKERS_MODIFIED = ['QQQ', 'SPY', 'DIA', 'GLD', 'TLT']
-WEIGHTS_MODIFIED = {'QQQ': 0.25, 'SPY': 0.25, 'DIA': 0.25, 'GLD': 0.125, 'TLT': 0.125}
-BANDS_MODIFIED = {
-    'QQQ': (1.025, 0.975),
-    'SPY': (1.030, 0.970),  # 3% 룰 적용
-    'DIA': (1.030, 0.970),  # 3% 룰 적용
-    'GLD': (1.025, 0.975),
-    'TLT': (1.030, 0.975)
-}
+TICKERS = ['QQQ', 'TLT', 'GLD']
+WEIGHTS = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25} # 합계 100% 보정
 
 MA_WINDOWS = [20, 120, 200]
 SCALAR_MAP = {3: 1.0, 2: 0.75, 1: 0.50, 0: 0.0}
 
+# 사용자가 요청한 9가지 밴드 조합 (상단 배수, 하단 배수)
+BANDS_LIST = [
+    (1.030, 0.970), (1.030, 0.975), (1.030, 0.980), # 매수 +3% / 매도 -3%, -2.5%, -2%
+    (1.025, 0.970), (1.025, 0.975), (1.025, 0.980), # 매수 +2.5% / 매도 -3%, -2.5%, -2%
+    (1.020, 0.970), (1.020, 0.975), (1.020, 0.980)  # 매수 +2% / 매도 -3%, -2.5%, -2%
+]
+
 # ==========================================
-# [2. 공통 백테스트 함수]
+# [2. 데이터 다운로드 (최대 기간)]
 # ==========================================
-def run_backtest(data_prices, tickers, weights, bands):
-    prices = data_prices[tickers]
-    daily_returns = prices.pct_change().shift(-1)
-    
-    weights_df = pd.DataFrame(0.0, index=prices.index, columns=tickers)
-    
-    for ticker in tickers:
-        up_mult, dn_mult = bands[ticker]
-        base_w = weights[ticker]
-        
+print(">>> 야후 파이낸스 데이터 다운로드 중 (period='max')...")
+data_full = yf.download(TICKERS, period="max", progress=False)
+
+if data_full.empty:
+    print("데이터 다운로드 실패")
+    sys.exit(1)
+
+# 다중 인덱스 처리 및 결측치 제거 (가장 늦게 상장한 GLD 기준일로 통합됨)
+if isinstance(data_full.columns, pd.MultiIndex):
+    prices = data_full['Adj Close'].ffill().dropna() if 'Adj Close' in data_full.columns.get_level_values(0) else data_full['Close'].ffill().dropna()
+else:
+    prices = data_full['Adj Close'].ffill().dropna() if 'Adj Close' in data_full.columns else data_full['Close'].ffill().dropna()
+
+# 자산별 내일의 일일 수익률 미리 계산 (shift(-1))
+daily_returns = prices.pct_change().shift(-1)
+
+# ==========================================
+# [3. 고속 연산: 자산별 9가지 시나리오 수익률 선계산]
+# ==========================================
+print(">>> 각 자산별 9가지 밴드 시나리오 독립 연산 중 (속도 최적화)...")
+asset_band_returns = {ticker: {} for ticker in TICKERS}
+
+for ticker in TICKERS:
+    for band in BANDS_LIST:
+        up_mult, dn_mult = band
         score_series = pd.Series(0, index=prices.index)
         
         for w in MA_WINDOWS:
@@ -44,7 +55,6 @@ def run_backtest(data_prices, tickers, weights, bands):
             upper = ma * up_mult
             lower = ma * dn_mult
             
-            # 주가가 상단 밴드 위면 1.0, 하단 밴드 아래면 0.0, 그 사이면 이전 상태 유지
             cond_up = prices[ticker] > upper
             cond_dn = prices[ticker] < lower
             
@@ -56,63 +66,68 @@ def run_backtest(data_prices, tickers, weights, bands):
             score_series += state
             
         scalar_series = score_series.map(SCALAR_MAP).fillna(0.0)
-        weights_df[ticker] = scalar_series * base_w
+        
+        # [해당 밴드 적용 시 자산의 포트폴리오 기여 수익률] = (기본 비중 * 스칼라) * 자산 일일 수익률
+        asset_band_returns[ticker][band] = scalar_series * WEIGHTS[ticker] * daily_returns[ticker]
 
-    # 포트폴리오 일일 수익률 계산 및 누적 수익률(Equity Curve) 산출
-    port_returns = (weights_df * daily_returns).sum(axis=1)
-    start_idx = MA_WINDOWS[-1]  # 200일 MA 계산을 위한 초기 기간 제외
-    port_returns = port_returns.iloc[start_idx:-1] 
+# ==========================================
+# [4. 729가지 조합 합산 및 지표 추출]
+# ==========================================
+print(">>> 729가지 포트폴리오 전체 조합 백테스트 진행 중...")
+results = []
+start_idx = MA_WINDOWS[-1] # 200일선 계산을 위한 초기 워밍업 기간 제외
+
+# itertools.product를 사용하여 9 x 9 x 9 = 729가지 조합 순회
+for qqq_band, tlt_band, gld_band in itertools.product(BANDS_LIST, BANDS_LIST, BANDS_LIST):
     
-    equity_curve = (1 + port_returns).cumprod()
-    return equity_curve
-
-# ==========================================
-# [3. 지표 산출 함수]
-# ==========================================
-def get_metrics(equity_curve):
+    # 3개 자산의 사전 계산된 기여 수익률을 단순 합산하여 포트폴리오 총 수익률 산출
+    port_ret = (asset_band_returns['QQQ'][qqq_band] + 
+                asset_band_returns['TLT'][tlt_band] + 
+                asset_band_returns['GLD'][gld_band])
+    
+    # 워밍업 기간 및 마지막 결측치 행 제거
+    port_ret = port_ret.iloc[start_idx:-1] 
+    
+    # 지표 계산
+    equity_curve = (1 + port_ret).cumprod()
     years = len(equity_curve) / 252.0
     cagr = (equity_curve.iloc[-1] / equity_curve.iloc[0]) ** (1 / years) - 1
     
-    daily_ret = equity_curve.pct_change().dropna()
-    vol = daily_ret.std() * np.sqrt(252)
+    vol = port_ret.std() * np.sqrt(252)
     sharpe = (cagr - 0.02) / vol if vol != 0 else 0  # 무위험 수익률 2% 가정
     
     roll_max = equity_curve.cummax()
-    drawdown = equity_curve / roll_max - 1
-    mdd = drawdown.min()
+    mdd = (equity_curve / roll_max - 1).min()
     
-    return cagr, mdd, sharpe
+    # 결과 저장 (출력 포맷 정리)
+    results.append({
+        'QQQ_Band': f"+{qqq_band[0]-1:.1%}/-{1-qqq_band[1]:.1%}",
+        'TLT_Band': f"+{tlt_band[0]-1:.1%}/-{1-tlt_band[1]:.1%}",
+        'GLD_Band': f"+{gld_band[0]-1:.1%}/-{1-gld_band[1]:.1%}",
+        'CAGR': cagr,
+        'MDD': mdd,
+        'Sharpe': sharpe
+    })
 
 # ==========================================
-# [4. 메인 실행]
+# [5. 결과 정렬 및 상위 10개 출력]
 # ==========================================
-if __name__ == "__main__":
-    print(">>> 야후 파이낸스에서 시장 데이터 다운로드 중...")
-    all_tickers = list(set(TICKERS_CURRENT + TICKERS_MODIFIED))
-    
-    # 넉넉한 백테스트 기간 확보
-    data = yf.download(all_tickers, period="max", progress=False)['Close']
-    data = data.ffill().dropna()
+df_results = pd.DataFrame(results)
 
-    print(">>> 백테스트 계산 중...\n")
-    
-    # 현재 포트폴리오 테스트
-    eq_current = run_backtest(data, TICKERS_CURRENT, WEIGHTS_CURRENT, BANDS_CURRENT)
-    c_cagr, c_mdd, c_sharpe = get_metrics(eq_current)
-    
-    # 수정 포트폴리오 테스트
-    eq_modified = run_backtest(data, TICKERS_MODIFIED, WEIGHTS_MODIFIED, BANDS_MODIFIED)
-    m_cagr, m_mdd, m_sharpe = get_metrics(eq_modified)
+# 샤프지수 기준으로 내림차순 정렬하여 최적의 상위 10개 추출
+df_sorted = df_results.sort_values(by='Sharpe', ascending=False).head(10)
 
-    # 결과 출력
-    print("="*50)
-    print("📊 [현재 포트폴리오] (QQQ 50 / TLT 25 / GLD 25)")
-    print(f" - CAGR  : {c_cagr:.2%}")
-    print(f" - MDD   : {c_mdd:.2%}")
-    print(f" - Sharpe: {c_sharpe:.2f}")
-    print("-" * 50)
-    print("📊 [수정 포트폴리오] (QQQ 25 / SPY 25 / DIA 25 / GLD 12.5 / TLT 12.5)")
-    print(f" - CAGR  : {m_cagr:.2%}")
-    print(f" - MDD   : {m_mdd:.2%}")
-    print(f" - Sharpe: {m_sharpe:.2f}")
-    print("="*50)
+print("\n" + "="*80)
+print("🏆 [Top 10 포트폴리오 최적 밴드 조합] (샤프지수 기준)")
+print("="*80)
+
+# 터미널 가독성을 높이기 위한 포맷터 적용
+print(df_sorted.to_string(
+    index=False, 
+    formatters={
+        'CAGR': '{:.2%}'.format, 
+        'MDD': '{:.2%}'.format, 
+        'Sharpe': '{:.3f}'.format
+    }
+))
+print("="*80)
