@@ -1,27 +1,28 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import itertools
 import sys
 
 # ==========================================
-# [1. 파라미터 및 단일 밴드 조합 설정]
+# [1. 파라미터 및 729가지 밴드 조합 설정]
 # ==========================================
 TICKERS = ['QQQ', 'TLT', 'GLD']
-WEIGHTS = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25}
+# WEIGHTS = {'QQQ': 0.50, 'TLT': 0.25, 'GLD': 0.25}
+WEIGHTS = {'QQQ': 0.70, 'TLT': 0.15, 'GLD': 0.15}
+MA_WINDOWS = [20, 120, 200]
+SCALAR_MAP = {3: 1.0, 2: 0.75, 1: 0.50, 0: 0.0}
 
 # 현금 연이율 2.0% 설정 및 일일 수익률 환산 (복리 기준)
 CASH_ANNUAL_RETURN = 0.020
-DAILY_CASH_RETURN = (1 + CASH_ANNUAL_RETURN) ** (1 / 252.0) - 1
+DAILY_CASH_RETURN = (1 + CASH_ANNUAL_RETURN) ** (1 / 252.0) - 1    # 영업일 252일 적용
 
-# 회원님께서 지정하신 자산별 밴드 룰
-BANDS = {
-    'QQQ': (1.020, 0.975),  # 매수 +2.0% / 매도 -2.5%
-    'TLT': (1.030, 0.975),  # 매수 +3.0% / 매도 -2.5%
-    'GLD': (1.025, 0.975)   # 매수 +2.5% / 매도 -2.5%
-}
-
-MA_WINDOWS = [20, 120, 200]
-SCALAR_MAP = {3: 1.0, 2: 0.75, 1: 0.50, 0: 0.0}
+# 사용자가 요청한 9가지 밴드 조합 (상단 배수, 하단 배수)
+BANDS_LIST = [
+    (1.030, 0.970), (1.030, 0.975), (1.030, 0.980), # 매수 +3% / 매도 -3%, -2.5%, -2%
+    (1.025, 0.970), (1.025, 0.975), (1.025, 0.980), # 매수 +2.5% / 매도 -3%, -2.5%, -2%
+    (1.020, 0.970), (1.020, 0.975), (1.020, 0.980)  # 매수 +2% / 매도 -3%, -2.5%, -2%
+]
 
 # ==========================================
 # [2. 데이터 다운로드 (최대 기간)]
@@ -39,74 +40,112 @@ if isinstance(data_full.columns, pd.MultiIndex):
 else:
     prices = data_full['Adj Close'].ffill().dropna() if 'Adj Close' in data_full.columns else data_full['Close'].ffill().dropna()
 
-# 자산별 내일의 일일 수익률 계산
+# 자산별 내일의 일일 수익률 미리 계산 (shift(-1))
 daily_returns = prices.pct_change().shift(-1)
 
 # ==========================================
-# [3. 백테스트 시뮬레이션 연산]
+# [3. 고속 연산: 자산별 수익률 및 투입 비중 선계산]
 # ==========================================
-print(">>> 시그널 생성 및 포트폴리오 수익률 계산 중...")
-weights_df = pd.DataFrame(0.0, index=prices.index, columns=TICKERS)
+print(">>> 각 자산별 9가지 밴드 시나리오 독립 연산 중 (속도 최적화)...")
+asset_band_returns = {ticker: {} for ticker in TICKERS}
+asset_band_weights = {ticker: {} for ticker in TICKERS} # 매일의 투입 비중을 추적하기 위한 딕셔너리 추가
 
 for ticker in TICKERS:
-    up_mult, dn_mult = BANDS[ticker]
-    score_series = pd.Series(0, index=prices.index)
-    
-    for w in MA_WINDOWS:
-        ma = prices[ticker].rolling(window=w).mean()
-        upper = ma * up_mult
-        lower = ma * dn_mult
+    for band in BANDS_LIST:
+        up_mult, dn_mult = band
+        score_series = pd.Series(0, index=prices.index)
         
-        cond_up = prices[ticker] > upper
-        cond_dn = prices[ticker] < lower
+        for w in MA_WINDOWS:
+            ma = prices[ticker].rolling(window=w).mean()
+            upper = ma * up_mult
+            lower = ma * dn_mult
+            
+            cond_up = prices[ticker] > upper
+            cond_dn = prices[ticker] < lower
+            
+            state = pd.Series(np.nan, index=prices.index)
+            state[cond_up] = 1.0
+            state[cond_dn] = 0.0
+            state = state.ffill().fillna(0.0)
+            
+            score_series += state
+            
+        scalar_series = score_series.map(SCALAR_MAP).fillna(0.0)
         
-        state = pd.Series(np.nan, index=prices.index)
-        state[cond_up] = 1.0
-        state[cond_dn] = 0.0
-        state = state.ffill().fillna(0.0)
+        # 해당 밴드 적용 시 자산의 투입 비중(Weight)
+        invested_weight = scalar_series * WEIGHTS[ticker]
+        asset_band_weights[ticker][band] = invested_weight
         
-        score_series += state
-        
-    scalar_series = score_series.map(SCALAR_MAP).fillna(0.0)
-    
-    # 일별 투자 비중(Weight) 할당
-    weights_df[ticker] = scalar_series * WEIGHTS[ticker]
-
-# 1. 포트폴리오에 투자된 총 비중 계산
-total_invested_weight = weights_df.sum(axis=1)
-
-# 2. 남은 현금 비중 계산
-cash_weight = 1.0 - total_invested_weight
-
-# 3. 자산 기여 수익률 + 현금 이자 수익 합산
-port_returns = (weights_df * daily_returns).sum(axis=1) + (cash_weight * DAILY_CASH_RETURN)
-
-# 워밍업 기간 및 마지막 결측치 행 제거
-start_idx = MA_WINDOWS[-1]
-port_returns = port_returns.iloc[start_idx:-1] 
+        # 해당 밴드 적용 시 자산의 기여 수익률
+        asset_band_returns[ticker][band] = invested_weight * daily_returns[ticker]
 
 # ==========================================
-# [4. 지표 추출 및 출력]
+# [4. 729가지 조합 합산 및 지표 추출 (현금 이자 포함)]
 # ==========================================
-equity_curve = (1 + port_returns).cumprod()
-years = len(equity_curve) / 252.0
+print(">>> 729가지 포트폴리오 전체 조합 백테스트 진행 중 (현금 2.5% 수익 반영)...")
+results = []
+start_idx = MA_WINDOWS[-1] # 200일선 계산을 위한 초기 워밍업 기간 제외
 
-cagr = (equity_curve.iloc[-1] / equity_curve.iloc[0]) ** (1 / years) - 1
-vol = port_returns.std() * np.sqrt(252)
-sharpe = (cagr - 0.02) / vol if vol != 0 else 0  # 무위험 수익률 2% 가정
-roll_max = equity_curve.cummax()
-mdd = (equity_curve / roll_max - 1).min()
+# itertools.product를 사용하여 9 x 9 x 9 = 729가지 조합 순회
+for qqq_band, tlt_band, gld_band in itertools.product(BANDS_LIST, BANDS_LIST, BANDS_LIST):
+    
+    # 1. 포트폴리오에 투자된 총 비중 계산
+    total_invested_weight = (asset_band_weights['QQQ'][qqq_band] + 
+                             asset_band_weights['TLT'][tlt_band] + 
+                             asset_band_weights['GLD'][gld_band])
+    
+    # 2. 남은 현금 비중 계산
+    cash_weight = 1.0 - total_invested_weight
+    
+    # 3. 자산 기여 수익률 합산 + 현금 이자 수익 합산
+    port_ret = (asset_band_returns['QQQ'][qqq_band] + 
+                asset_band_returns['TLT'][tlt_band] + 
+                asset_band_returns['GLD'][gld_band] + 
+                (cash_weight * DAILY_CASH_RETURN))
+    
+    # 워밍업 기간 및 마지막 결측치 행 제거
+    port_ret = port_ret.iloc[start_idx:-1] 
+    
+    # 지표 계산
+    equity_curve = (1 + port_ret).cumprod()
+    years = len(equity_curve) / 252.0
+    cagr = (equity_curve.iloc[-1] / equity_curve.iloc[0]) ** (1 / years) - 1
+    
+    vol = port_ret.std() * np.sqrt(252)
+    sharpe = (cagr - 0.02) / vol if vol != 0 else 0  # 무위험 수익률 2% 가정
+    
+    roll_max = equity_curve.cummax()
+    mdd = (equity_curve / roll_max - 1).min()
+    
+    # 결과 저장
+    results.append({
+        'QQQ_Band': f"+{qqq_band[0]-1:.1%}/-{1-qqq_band[1]:.1%}",
+        'TLT_Band': f"+{tlt_band[0]-1:.1%}/-{1-tlt_band[1]:.1%}",
+        'GLD_Band': f"+{gld_band[0]-1:.1%}/-{1-gld_band[1]:.1%}",
+        'CAGR': cagr,
+        'MDD': mdd,
+        'Sharpe': sharpe
+    })
 
-print("\n" + "="*50)
-print("📊 [단일 포트폴리오 백테스트 결과]")
-print("="*50)
-print(f" - 자산 비중: QQQ 50% / TLT 25% / GLD 25%")
-print(f" - QQQ 밴드 : +2.0% / -2.5%")
-print(f" - TLT 밴드 : +3.0% / -2.5%")
-print(f" - GLD 밴드 : +2.5% / -2.5%")
-print(f" - 현금 이자: 연 2.0% 복리 반영")
-print("-" * 50)
-print(f" - CAGR (연평균 수익률): {cagr:.2%}")
-print(f" - MDD  (최대 낙폭)  : {mdd:.2%}")
-print(f" - Sharpe Ratio      : {sharpe:.3f}")
-print("="*50)
+# ==========================================
+# [5. 결과 정렬 및 상위 10개 출력]
+# ==========================================
+df_results = pd.DataFrame(results)
+
+# 샤프지수 기준으로 내림차순 정렬하여 최적의 상위 10개 추출
+df_sorted = df_results.sort_values(by='Sharpe', ascending=False).head(10)
+
+print("\n" + "="*80)
+print("🏆 [Top 10 포트폴리오 최적 밴드 조합] (현금 연 2.0% 이자 반영, 샤프지수 기준)")
+print("="*80)
+
+# 터미널 가독성을 높이기 위한 포맷터 적용
+print(df_sorted.to_string(
+    index=False, 
+    formatters={
+        'CAGR': '{:.2%}'.format, 
+        'MDD': '{:.2%}'.format, 
+        'Sharpe': '{:.3f}'.format
+    }
+))
+print("="*80)
