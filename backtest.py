@@ -1,121 +1,191 @@
 import yfinance as yf
-import pandas as pd
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 
-def run_weight_comparison():
-    print("시장 데이터를 다운로드하는 중입니다...")
+# ==========================================
+# [1. 전략 파라미터 설정]
+# ==========================================
+TICKERS_BASE = ['QQQ', 'TLT', 'GLD']
+TICKER_ALT = 'DIA'
+ALL_TICKERS = TICKERS_BASE + [TICKER_ALT]
+
+# 기본 자산 목표 비중
+BASE_WEIGHTS = {
+    'QQQ': 0.50,
+    'TLT': 0.25,
+    'GLD': 0.25
+}
+
+# 이동평균선 기간
+MA_WINDOWS = [20, 120, 200]
+
+# 신호 강도 맵핑
+SCALAR_MAP = {3: 1.0, 2: 0.75, 1: 0.50, 0: 0.0}
+
+# 종목별 이격도 밴드 (매수 돌파 / 매도 이탈)
+# DIA는 요청하신 대로 매수 +3% / 매도 -3% 룰을 적용합니다.
+BANDS = {
+    'QQQ': (1.025, 0.975),  # 기존 하이브리드 최적값
+    'TLT': (1.030, 0.975),  # 기존 하이브리드 최적값
+    'GLD': (1.025, 0.975),  # 기존 하이브리드 최적값
+    'DIA': (1.030, 0.970)   # 신규 적용: 매수 +3% / 매도 -3%
+}
+
+# ==========================================
+# [2. 데이터 다운로드]
+# ==========================================
+print("... 시장 데이터 다운로드 중 (QQQ, TLT, GLD, DIA) ...")
+data = yf.download(ALL_TICKERS, start="2004-01-01", progress=False)
+
+# MultiIndex 호환성 처리
+if isinstance(data.columns, pd.MultiIndex):
+    if 'Adj Close' in data.columns.get_level_values(0):
+        prices_df = data['Adj Close'].ffill().dropna()
+    else:
+        prices_df = data['Close'].ffill().dropna()
+else:
+    prices_df = data.ffill().dropna()
+
+# ==========================================
+# [3. 이동평균 및 Hysteresis 밴드 계산]
+# ==========================================
+ma_lines = {}
+upper_bands = {}
+lower_bands = {}
+
+for ticker in ALL_TICKERS:
+    up_mult, dn_mult = BANDS[ticker]
+    for window in MA_WINDOWS:
+        ma_key = f"{ticker}_{window}"
+        ma = prices_df[ticker].rolling(window=window).mean()
+        ma_lines[ma_key] = ma
+        upper_bands[ma_key] = ma * up_mult
+        lower_bands[ma_key] = ma * dn_mult
+
+# ==========================================
+# [4. 시뮬레이션 및 신호 스칼라 추출]
+# ==========================================
+print("... Hysteresis 신호 처리 및 비중 계산 중 ...")
+
+# 각 종목의 투입 강도(0, 0.5, 0.75, 1.0)를 저장할 DataFrame
+scalars = pd.DataFrame(0.0, index=prices_df.index, columns=ALL_TICKERS)
+current_states = {f"{ticker}_{window}": 0.0 for ticker in ALL_TICKERS for window in MA_WINDOWS}
+
+start_idx = max(MA_WINDOWS)
+
+# 시간순 루프 (과거 데이터를 훑으며 신호 판별)
+for i in range(start_idx, len(prices_df)):
+    today_scores = {}
     
-    tickers = ['QQQ', 'TLT', 'GLD']
-    mas = [20, 120, 200]
-    scalar_map = {0: 0.0, 1: 0.50, 2: 0.75, 3: 1.00}
-    cash_rate = 0.02 / 252  
-    
-    # [최종 진화] 자산별 영점 조준이 끝난 궁극의 밴드 세팅
-    bands = {
-        'QQQ': (1.025, 0.975),
-        'TLT': (1.030, 0.975),
-        'GLD': (1.025, 0.975)
-    }
-    
-    data = pd.DataFrame()
-    for ticker in tickers:
-        df = yf.download(ticker, start='2004-01-01', progress=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        data[ticker] = df['Adj Close'] if 'Adj Close' in df.columns else df['Close']
+    for ticker in ALL_TICKERS:
+        score = 0
+        for window in MA_WINDOWS:
+            ma_key = f"{ticker}_{window}"
+            prev_state = current_states[ma_key]
             
-    data = data.ffill().dropna()
-    returns = data.pct_change().dropna()
-
-    # 두 가지 비중 시나리오 정의
-    scenarios = {
-        "1) 60 / 15 / 25 (금 비중 높임)": {'QQQ': 0.60, 'TLT': 0.15, 'GLD': 0.25},
-        "2) 60 / 25 / 15 (채권 비중 높임)": {'QQQ': 0.60, 'TLT': 0.25, 'GLD': 0.15}
-    }
-
-    print("\n비중 비교 백테스트 시뮬레이션 중...\n")
-    print("="*65)
-    print(" ⚖️ QQQ 60% 상태에서 TLT vs GLD 방어력 비교 ⚖️")
-    print("="*65)
-
-    plt.figure(figsize=(14, 10))
-    colors = ['blue', 'green']
-
-    for idx, (scenario_name, base_weights) in enumerate(scenarios.items()):
-        portfolio_return = pd.Series(0.0, index=returns.index)
-        asset_weights = pd.DataFrame(index=returns.index, columns=tickers)
-
-        for ticker in tickers:
-            price = data[ticker]
-            total_signals = pd.Series(0, index=price.index)
-            up_band, dn_band = bands[ticker]
+            price = prices_df[ticker].iloc[i]
+            upper = upper_bands[ma_key].iloc[i]
+            lower = lower_bands[ma_key].iloc[i]
             
-            for ma_period in mas:
-                ma = price.rolling(window=ma_period).mean()
-                state = np.zeros(len(price))
-                p_vals = price.values
-                m_vals = ma.values
-                curr_state = 0
+            if pd.isna(upper):
+                new_state = 0.0
+            elif prev_state == 1.0:
+                new_state = 1.0 if price >= lower else 0.0
+            else:
+                new_state = 1.0 if price > upper else 0.0
                 
-                for i in range(len(p_vals)):
-                    if np.isnan(m_vals[i]): continue
-                    if p_vals[i] > m_vals[i] * up_band: curr_state = 1
-                    elif p_vals[i] < m_vals[i] * dn_band: curr_state = 0
-                    state[i] = curr_state
-                    
-                total_signals += state
-                
-            invested_fraction = total_signals.map(scalar_map).shift(1).fillna(0)
-            actual_weight = invested_fraction * base_weights[ticker]
-            asset_weights[ticker] = actual_weight
-            portfolio_return += actual_weight * returns[ticker]
-
-        total_invested = asset_weights.sum(axis=1)
-        cash_weight = 1.0 - total_invested
-        portfolio_return += cash_weight * cash_rate
-
-        cum_returns = (1 + portfolio_return).cumprod()
-        years = len(cum_returns) / 252.0
-
-        cagr = cum_returns.iloc[-1] ** (1 / years) - 1
-        ann_vol = portfolio_return.std() * np.sqrt(252)
-        sharpe = (portfolio_return.mean() * 252 - 0.02) / ann_vol
-
-        roll_max = cum_returns.cummax()
-        drawdown = (cum_returns - roll_max) / roll_max
-        mdd = drawdown.min()
-
-        weight_changes = asset_weights.diff().fillna(0)
-        trades_per_asset = (weight_changes != 0).sum()
-        total_trades = trades_per_asset.sum()
-
-        print(f"[{scenario_name}]")
-        print(f"  ▶ CAGR: {cagr*100:.2f}% | MDD: {mdd*100:.2f}% | Sharpe: {sharpe:.2f}")
-        print(f"  ▶ 총 리밸런싱: {total_trades:.0f}회 (QQQ {trades_per_asset['QQQ']}, TLT {trades_per_asset['TLT']}, GLD {trades_per_asset['GLD']})")
-        print("-" * 65)
-
-        plt.subplot(2, 1, 1)
-        plt.plot(cum_returns.index, cum_returns, label=f"{scenario_name} (CAGR {cagr*100:.2f}%)", color=colors[idx], linewidth=1.5)
+            current_states[ma_key] = new_state
+            score += int(new_state)
+            
+        today_scores[ticker] = score
         
-        plt.subplot(2, 1, 2)
-        plt.plot(drawdown.index, drawdown * 100, label=f"{scenario_name} (MDD {mdd*100:.2f}%)", color=colors[idx], linewidth=1.5, alpha=0.8)
+    # 점수(0~3)를 투자 비중(Scalar)으로 변환하여 저장
+    for ticker in ALL_TICKERS:
+        scalars.loc[prices_df.index[i], ticker] = SCALAR_MAP[today_scores[ticker]]
 
-    plt.subplot(2, 1, 1)
-    plt.title('Cumulative Return Comparison (Log Scale)')
-    plt.yscale('log')
-    plt.grid(True, alpha=0.3)
-    plt.legend()
+# ==========================================
+# [5. 포트폴리오 비중 (Weight) 할당 로직]
+# ==========================================
+weights = pd.DataFrame(0.0, index=prices_df.index, columns=ALL_TICKERS + ['CASH'])
 
-    plt.subplot(2, 1, 2)
-    plt.title('Drawdown Comparison (%)')
-    plt.ylabel('MDD (%)')
-    plt.grid(True, alpha=0.3)
-    plt.legend()
+# 1. Base 자산 비중 계산
+weights['QQQ'] = BASE_WEIGHTS['QQQ'] * scalars['QQQ']
+weights['TLT'] = BASE_WEIGHTS['TLT'] * scalars['TLT']
+weights['GLD'] = BASE_WEIGHTS['GLD'] * scalars['GLD']
 
-    plt.tight_layout()
-    plt.savefig('weight_comparison_60.png', dpi=150)
-    print("\n[알림] 비교 그래프가 'weight_comparison_60.png'로 저장되었습니다.")
+# 2. Base 자산에서 발생한 현금(Cash) 합산
+base_cash = (BASE_WEIGHTS['QQQ'] * (1 - scalars['QQQ']) + 
+             BASE_WEIGHTS['TLT'] * (1 - scalars['TLT']) + 
+             BASE_WEIGHTS['GLD'] * (1 - scalars['GLD']))
 
-if __name__ == "__main__":
-    run_weight_comparison()
+# 3. DIA 투입 및 최종 현금 비중 확정 (Rule 1, 2, 3 적용)
+weights['DIA'] = base_cash * scalars['DIA']
+weights['CASH'] = base_cash * (1 - scalars['DIA'])
+
+# ==========================================
+# [6. 수익률 및 성과 지표(백테스트) 계산]
+# ==========================================
+# 일일 자산 수익률
+daily_returns = prices_df.pct_change()
+daily_returns['CASH'] = 0.0  # 현금 수익률 보수적으로 0% 가정
+
+# Look-ahead bias 방지: 어제 종가 기준 확정된 비중으로 오늘의 수익을 얻음 (shift(1))
+port_returns = (weights.shift(1) * daily_returns).sum(axis=1)
+
+# 누적 수익률 및 낙폭(MDD) 계산
+cum_returns = (1 + port_returns).cumprod()
+roll_max = cum_returns.cummax()
+drawdown = (cum_returns / roll_max) - 1.0
+
+# 성과 지표 산출
+days = len(port_returns)
+years = days / 252
+
+cagr = (cum_returns.iloc[-1] ** (1 / years)) - 1
+mdd = drawdown.min()
+vol = port_returns.std() * np.sqrt(252)
+sharpe = cagr / vol if vol != 0 else 0
+
+# 매매 횟수 (Turnover)
+# 목표 비중(weights)이 어제와 0.1% 이상 달라졌을 때 리밸런싱 이벤트로 간주
+weight_diff = weights.diff().abs().sum(axis=1)
+rebalance_count = (weight_diff > 0.001).sum()
+
+print("\n" + "="*50)
+print(" 🚀 DIA-Alternative Hysteresis-TAA Backtest Result")
+print("="*50)
+print("목표 비중   : QQQ 50%, TLT 25%, GLD 25%")
+print("대체 자산   : 현금 발생 시 DIA 우선 투입 (남은 비중만 현금화)")
+print("신호 강도   : 1개=50%, 2개=75%, 3개=100%")
+print(f"테스트 기간 : {prices_df.index[start_idx].strftime('%Y-%m-%d')} ~ {prices_df.index[-1].strftime('%Y-%m-%d')}\n")
+
+print(f"▶ 연평균 수익 (CAGR) : {cagr*100:.2f}%")
+print(f"▶ 최대 낙폭 (MDD)    : {mdd*100:.2f}%")
+print(f"▶ 연평균 변동성      : {vol*100:.2f}%")
+print(f"▶ 샤프 지수 (Sharpe) : {sharpe:.2f}\n")
+print(f"▶ 총 리밸런싱 횟수   : {rebalance_count}회 (연평균 {rebalance_count/years:.1f}회)")
+print("="*50)
+
+# ==========================================
+# [7. 차트 생성 및 저장]
+# ==========================================
+plt.figure(figsize=(12, 8))
+plt.subplot(2, 1, 1)
+plt.plot(cum_returns.index, cum_returns * 100, label='Portfolio Cumulative Return', color='blue')
+plt.yscale('log')
+plt.title('DIA-Alternative Hysteresis-TAA Performance (Log Scale)')
+plt.ylabel('Cumulative Return (%)')
+plt.legend()
+plt.grid(True, alpha=0.3)
+
+plt.subplot(2, 1, 2)
+plt.plot(drawdown.index, drawdown * 100, label=f'Drawdown (MDD {mdd*100:.2f}%)', color='red', alpha=0.8)
+plt.fill_between(drawdown.index, drawdown * 100, 0, color='red', alpha=0.2)
+plt.ylabel('Drawdown (%)')
+plt.legend()
+plt.grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.savefig('backtest_dia_alternative.png')
+print("\n[알림] 차트가 'backtest_dia_alternative.png' 파일로 저장되었습니다.")
