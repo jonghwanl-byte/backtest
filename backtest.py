@@ -8,7 +8,7 @@ import sys
 # [1. 파라미터 및 729가지 밴드 조합 설정]
 # ==========================================
 TICKERS = ['QQQ', 'TLT', 'GLD']
-WEIGHTS = {'QQQ': 0.6, 'TLT': 0.2, 'GLD': 0.2}
+WEIGHTS = {'QQQ': 0.8, 'TLT': 0.1, 'GLD': 0.1}
 # WEIGHTS = {'QQQ': 0.40, 'TLT': 0.30, 'GLD': 0.30}
 MA_WINDOWS = [20, 120, 200]
 SCALAR_MAP = {3: 1.0, 2: 0.5, 1: 0.25, 0: 0.0}
