@@ -11,7 +11,7 @@ TICKERS = ['QQQ', 'TLT', 'GLD']
 WEIGHTS = {'QQQ': 0.6, 'TLT': 0.2, 'GLD': 0.2}
 # WEIGHTS = {'QQQ': 0.40, 'TLT': 0.30, 'GLD': 0.30}
 MA_WINDOWS = [20, 120, 200]
-SCALAR_MAP = {3: 1.0, 2: 0.75, 1: 0.50, 0: 0.0}
+SCALAR_MAP = {3: 1.0, 2: 0.5, 1: 0.25, 0: 0.0}
 
 # 현금 연이율 2.0% 설정 및 일일 수익률 환산 (복리 기준)
 CASH_ANNUAL_RETURN = 0.020
