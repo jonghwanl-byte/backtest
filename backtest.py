@@ -28,7 +28,7 @@ BANDS_LIST = [
 # [2. 데이터 다운로드 (최대 기간)]
 # ==========================================
 print(">>> 야후 파이낸스 데이터 다운로드 중 (period='10Y')...")
-data_full = yf.download(TICKERS, period="10Y", progress=False)
+data_full = yf.download(TICKERS, period="5Y", progress=False)
 
 if data_full.empty:
     print("데이터 다운로드 실패")
