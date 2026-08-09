@@ -26,20 +26,20 @@ class StrategyConfig:
     """전략 파라미터. 이 조합 하나가 '케이스' 하나에 해당."""
 
     base_weights: Dict[str, float] = field(
-        default_factory=lambda: {"QQQ": 0.80, "TLT": 0.10, "GLD": 0.10}
+        default_factory=lambda: {"QQQ": 0.60, "TLT": 0.20, "GLD": 0.20}
     )
     # (상단배수, 하단배수). 1.030 = MA 대비 +3.0% 돌파 시 ON
     bands: Dict[str, Tuple[float, float]] = field(
         default_factory=lambda: {
-            "QQQ": (1.030, 0.980),
-            "TLT": (1.030, 0.980),
-            "GLD": (1.025, 0.970),
+            "QQQ": (1.015, 0.975),
+            "TLT": (1.015, 0.975),
+            "GLD": (1.015, 0.975),
         }
     )
     ma_windows: Tuple[int, ...] = (20, 120, 200)
     # ON 개수 -> 목표비중 투입 스케일
     scalar_map: Dict[int, float] = field(
-        default_factory=lambda: {3: 1.00, 2: 0.50, 1: 0.25, 0: 0.00}
+        default_factory=lambda: {3: 1.00, 2: 0.75, 1: 0.50, 0: 0.00}
     )
 
     def label(self) -> str:
