@@ -1,0 +1,74 @@
+name: TAA 전략 검증
+
+# 수동 실행 전용 (매일 돌릴 필요 없음)
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: '검증 단계 (all | lag | subperiod | grid | wf | cost | bench | live)'
+        required: false
+        default: 'lag'
+      grid_mode:
+        description: '격자 범위 (qqq | linked | full)'
+        required: false
+        default: 'qqq'
+        type: choice
+        options: [qqq, linked, full]
+      quick:
+        description: '격자 축소 (빠른 확인)'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 데이터 캐시 복원
+        uses: actions/cache@v4
+        with:
+          path: _cache
+          key: taa-prices-${{ github.run_id }}
+          restore-keys: taa-prices-
+
+      - name: 엔진 자체 검증 (합성 데이터, 네트워크 불필요)
+        run: python run_study.py --synthetic --quick --stage lag
+
+      - name: 실제 데이터 검증 실행
+        run: |
+          python run_study.py \
+            --stage "${{ inputs.stage }}" \
+            --grid-mode "${{ inputs.grid_mode }}" \
+            ${{ inputs.quick && '--quick' || '' }}
+
+      - name: 결과 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: taa-study-${{ github.run_number }}
+          path: |
+            out/
+          retention-days: 30
+
+      - name: 요약을 실행 페이지에 표시
+        if: always()
+        run: |
+          if [ -f out/report.md ]; then
+            head -c 900000 out/report.md >> $GITHUB_STEP_SUMMARY
+          else
+            echo "리포트 생성 실패 - 로그 확인 필요" >> $GITHUB_STEP_SUMMARY
+          fi
