@@ -1,0 +1,24 @@
+name: 주식자산 비교 (QQQ vs SPY)
+
+on:
+  workflow_dispatch:
+    inputs:
+      equities:
+        description: '비교할 주식 자산 (공백 구분). 비우면 QQQ SPY'
+        required: false
+        default: 'QQQ SPY'
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install yfinance pandas numpy
+      - run: |
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          python compare.py ${{ inputs.equities }} | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
