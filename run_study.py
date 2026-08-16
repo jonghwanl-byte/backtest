@@ -67,7 +67,7 @@ def main():
     ap.add_argument("--end", default=None)
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--synthetic", action="store_true")
-    ap.add_argument("--grid-mode", default="qqq", choices=["qqq", "full", "linked"])
+    ap.add_argument("--grid-mode", default="spy", choices=["spy", "full", "linked"])
     ap.add_argument("--stage", default="all")
     ap.add_argument("--flat-cash", action="store_true", help="README식 flat 2% 현금 가정")
     ap.add_argument("--no-tax", action="store_true")
@@ -124,25 +124,25 @@ def main():
     # ---------------- 2. 구간 분해 ----------------
     if run("subperiod"):
         print("\n[2] 구간별 분해")
-        emit("2a_IS_OOS", subperiod_table(base_r, cash_eval, IS_OOS, bench["QQQ 매수보유"]),
+        emit("2a_IS_OOS", subperiod_table(base_r, cash_eval, IS_OOS, bench["SPY 매수보유"]),
              "검증2a. 표본내 vs 표본외",
              "README 최적화 구간(2015-2024) 밖에서 성과가 유지되는지가 핵심.")
-        emit("2b_regimes", subperiod_table(base_r, cash_eval, REGIMES, bench["QQQ 매수보유"]),
+        emit("2b_regimes", subperiod_table(base_r, cash_eval, REGIMES, bench["SPY 매수보유"]),
              "검증2b. 매크로 레짐별")
-        emit("2c_market_type", market_type_table(base_r, cash_eval, bench["QQQ 매수보유"]),
+        emit("2c_market_type", market_type_table(base_r, cash_eval, bench["SPY 매수보유"]),
              "검증2c. 시장 국면별",
              "'완만한 약세장(휩쏘 다발)'이 이 전략의 최대 약점. 여기 숫자를 보라.")
         rt = rolling_table(base_r, cash_eval, years=3, step_months=6)
         emit("2d_rolling3y", rt, "검증2d. 롤링 3년 (중첩)",
              f"요약: {rt.attrs.get('summary')}" if not rt.empty else "")
-        emit("2e_annual", annual_table(base_r, bench["QQQ 매수보유"]).reset_index()
+        emit("2e_annual", annual_table(base_r, bench["SPY 매수보유"]).reset_index()
              .rename(columns={"index": "year"}), "검증2e. 연도별")
 
     # ---------------- 3. 격자 + 견고성 ----------------
     grid = None
     if run("grid"):
         print(f"\n[3] 격자 스캔 (mode={args.grid_mode})")
-        kw = dict(vary=("QQQ",)) if args.grid_mode == "qqq" else \
+        kw = dict(vary=("SPY",)) if args.grid_mode == "spy" else \
              dict(vary=tuple(TICKERS)) if args.grid_mode == "full" else dict(link_bands=True)
         grid = full_grid(prices, cash, spec, ex, strat.ma_windows,
                          WEIGHT_SCENARIOS, SCALAR_RULES, mask=mask_eval, **kw)
@@ -164,7 +164,7 @@ def main():
                  f"고립도 {rep['isolation']:.3f} = 최적값 − 이웃평균)")
             if args.grid_mode != "linked":
                 emit(f"3c_surf_{scen.replace('/', '')}", rep["surface"].reset_index(),
-                     f"검증3c. QQQ 밴드 표면 [{scen}] (행=상단, 열=하단)",
+                     f"검증3c. SPY 밴드 표면 [{scen}] (행=상단, 열=하단)",
                      "전체가 비슷하면 고원(신뢰 가능), 한 칸만 튀면 첨탑(과최적화).")
 
         emit("3d_overfit", pd.DataFrame([overfit_diagnostics(grid, int(mask_eval.sum()))]),
@@ -180,7 +180,7 @@ def main():
         print("\n[4] 워크포워드 (표본외 실전 기대치)")
         wf_ret, wf_log = walk_forward(prices, cash, spec, ex, strat.base_weights,
                                       strat.scalar_map, strat.ma_windows,
-                                      is_years=4, oos_years=1, vary=("QQQ",))
+                                      is_years=4, oos_years=1, vary=("SPY",))
         if not wf_log.empty:
             emit("4a_wf_log", wf_log, "검증4a. 워크포워드 구간별",
                  f"IS→OOS 샤프 열화: **{wf_log.attrs['degradation']:.3f}**, "
@@ -203,7 +203,7 @@ def main():
         emit("6a_vol_matched", vol_matched_comparison({"전략(최적밴드)": base_r, **bench},
                                                       cash_eval, 0.10),
              "검증6a. 변동성 10% 정규화 비교",
-             "복잡한 15파라미터 시스템이 'QQQ 200MA 단순필터'를 얼마나 이기는가? "
+             "복잡한 15파라미터 시스템이 'SPY 200MA 단순필터'를 얼마나 이기는가? "
              "차이가 작으면 나머지 파라미터는 장식이다.")
         emit("6b_bootstrap", bootstrap_ci(base_r, 2000).reset_index()
              .rename(columns={"index": "metric"}),
