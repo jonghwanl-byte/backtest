@@ -9,11 +9,11 @@ on:
         required: false
         default: 'lag'
       grid_mode:
-        description: '격자 범위 (qqq | linked | full)'
+        description: '격자 범위 (spy | linked | full)'
         required: false
-        default: 'qqq'
+        default: 'spy'
         type: choice
-        options: [qqq, linked, full]
+        options: [spy, linked, full]
       quick:
         description: '격자 축소 (빠른 확인)'
         required: false
