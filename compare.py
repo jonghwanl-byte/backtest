@@ -24,7 +24,7 @@ import pandas as pd
 import yfinance as yf
 
 # ===== 확정 설정 =======================================================
-EQUITIES = sys.argv[1:] if len(sys.argv) > 1 else ["QQQ", "SPY"]
+EQUITIES = sys.argv[1:] if len(sys.argv) > 1 else ["QQQ", "QLD"]
 SATELLITE = ["TLT", "GLD"]
 BASE_W = {"EQ": 0.60, "TLT": 0.20, "GLD": 0.20}
 
