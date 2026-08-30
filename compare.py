@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-주식 자산 비교 — QQQ vs SPY (TLT/GLD 공통)
+주식 자산 비교 — QQQ vs QLD (TLT/GLD 공통)
 
 확정 설정을 고정한 채 주식 자산만 바꿔 나란히 비교한다.
 밴드가 QQQ 변동성에 맞춰 최적화된 값이므로, SPY 전용 밴드도 함께 탐색한다.
