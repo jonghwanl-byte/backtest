@@ -38,7 +38,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "yfinance==0.2.65" pandas numpy requests
+          pip install "yfinance==0.2.65" pandas numpy
 
       - name: Run KRW study
         env:
@@ -46,8 +46,6 @@ jobs:
           TICKERS:       ${{ inputs.tickers }}
           START:         ${{ inputs.start }}
           KRW_CASH_RATE: ${{ inputs.krw_cash_rate }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python krw_study.py
 
       - name: Upload results
