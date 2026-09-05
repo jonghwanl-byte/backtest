@@ -14,7 +14,7 @@ krw_study.py — 코어 TAA 전략의 원화 기준 성과 측정.
 실행:
     GitHub Actions 수동 디스패치 (krw_study.yml)
 출력:
-    CSV artifact + Step Summary + Telegram
+    CSV artifact + Step Summary (콘솔 출력)
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ import traceback
 from datetime import datetime, timezone, timedelta
 
 import pandas as pd
-import requests
 import yfinance as yf
 
 import fx as fxlib
@@ -49,9 +48,6 @@ TICKERS = env("TICKERS", "QQQ,TLT,GLD").split(",")
 FX_SOURCE = env("FX_SOURCE", "fred")            # fred | yfinance
 START = env("START", "")                         # 빈 값이면 전체 이력
 KRW_CASH_RATE = float(env("KRW_CASH_RATE", "0.0"))
-
-TG_TOKEN = env("TELEGRAM_BOT_TOKEN")
-TG_CHAT = env("TELEGRAM_CHAT_ID")
 
 KST = timezone(timedelta(hours=9))
 
@@ -154,25 +150,6 @@ def write_step_summary(text: str) -> None:
             f.write(text + "\n")
 
 
-def send_telegram(html: str) -> None:
-    if not (TG_TOKEN and TG_CHAT):
-        print("[telegram] 자격증명 없음 — 전송 생략")
-        return
-    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    for chunk in [html[i:i + 3800] for i in range(0, len(html), 3800)]:
-        for attempt in range(3):
-            try:
-                r = requests.post(url, timeout=20, data={
-                    "chat_id": TG_CHAT, "text": chunk,
-                    "parse_mode": "HTML", "disable_web_page_preview": True,
-                })
-                if r.ok:
-                    break
-                print(f"[telegram] {r.status_code} {r.text[:200]}")
-            except Exception as e:
-                print(f"[telegram] 시도 {attempt + 1} 실패: {e}")
-
-
 # ---------------------------------------------------------------------------
 # 메인
 # ---------------------------------------------------------------------------
@@ -237,18 +214,7 @@ def main() -> int:
                   f"| {fmt_pct(row['USD MDD'])} | {fmt_pct(row['KRW MDD'])} |")
     write_step_summary("\n".join(md))
 
-    # --- Telegram ---------------------------------------------------------
-    now = datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")
-    lines = [f"<b>원화 기준 백테스트</b>  <i>{now}</i>", ""]
-    for label, row in comp.iterrows():
-        lines.append(f"<b>{label}</b>  CAGR {fmt_pct(row['CAGR'])} / "
-                     f"MDD {fmt_pct(row['MDD'])} / SR {row['Sharpe']:.3f}")
-    lines.append("")
-    lines.append("<b>구간별 MDD (USD → KRW)</b>")
-    for name, row in subs.iterrows():
-        lines.append(f"· {name}: {fmt_pct(row['USD MDD'])} → {fmt_pct(row['KRW MDD'])}")
-    send_telegram("\n".join(lines))
-
+    print(f"\n완료: {datetime.now(KST).strftime('%Y-%m-%d %H:%M KST')}")
     return 0
 
 
@@ -257,5 +223,4 @@ if __name__ == "__main__":
         sys.exit(main())
     except Exception:
         traceback.print_exc()
-        send_telegram(f"<b>원화 백테스트 실패</b>\n<pre>{traceback.format_exc()[-1500:]}</pre>")
         sys.exit(1)
