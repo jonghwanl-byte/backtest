@@ -1,0 +1,63 @@
+name: KRW Study
+
+# 수동 실행 전용. 스케줄 없음 — 1회성 측정이지 운영 봇이 아니다.
+on:
+  workflow_dispatch:
+    inputs:
+      fx_source:
+        description: "환율 데이터 소스"
+        type: choice
+        options: [fred, yfinance]
+        default: fred
+      tickers:
+        description: "대상 티커 (콤마 구분)"
+        type: string
+        default: "QQQ,TLT,GLD"
+      start:
+        description: "시작일 YYYY-MM-DD (비우면 전체 이력)"
+        type: string
+        default: ""
+      krw_cash_rate:
+        description: "원화 현금 연이율 (0.03 = 3%)"
+        type: string
+        default: "0.0"
+
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "yfinance==0.2.65" pandas numpy requests
+
+      - name: Run KRW study
+        env:
+          FX_SOURCE:     ${{ inputs.fx_source }}
+          TICKERS:       ${{ inputs.tickers }}
+          START:         ${{ inputs.start }}
+          KRW_CASH_RATE: ${{ inputs.krw_cash_rate }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python krw_study.py
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: krw-study-results
+          path: |
+            krw_study_summary.csv
+            krw_study_subperiods.csv
+            krw_study_returns.csv
+          if-no-files-found: warn
+          retention-days: 30
