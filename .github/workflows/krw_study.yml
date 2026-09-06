@@ -18,9 +18,9 @@ on:
         type: string
         default: ""
       krw_cash_rate:
-        description: "원화 현금 연이율 (0.03 = 3%)"
+        description: "원화 현금 연이율 (0.02 = 2%)"
         type: string
-        default: "0.0"
+        default: "0.02"
 
 jobs:
   study:
@@ -39,6 +39,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install "yfinance==0.2.65" "pandas<3" "numpy<3"
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Run KRW study
         env:
@@ -46,6 +47,7 @@ jobs:
           TICKERS:       ${{ inputs.tickers }}
           START:         ${{ inputs.start }}
           KRW_CASH_RATE: ${{ inputs.krw_cash_rate }}
+          KRW_DEDUCTION: "2500000"
         run: python krw_study.py
 
       - name: Upload results
@@ -54,8 +56,9 @@ jobs:
         with:
           name: krw-study-results
           path: |
-            krw_study_summary.csv
-            krw_study_subperiods.csv
-            krw_study_returns.csv
+            krw_summary.csv
+            krw_subperiods.csv
+            krw_returns.csv
+            krw_equity.csv
           if-no-files-found: warn
           retention-days: 30
