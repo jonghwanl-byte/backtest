@@ -22,8 +22,13 @@ on:
         type: choice
         options: [usd, krw]
         default: usd
+      krw_rate_source:
+        description: "원화 현금 금리 (fred = 실제 시계열, flat = 고정)"
+        type: choice
+        options: [fred, flat]
+        default: fred
       krw_cash_rate:
-        description: "cash_ccy=krw 일 때만 사용하는 원화 연이율"
+        description: "krw_rate_source=flat 일 때만 사용하는 고정 연이율"
         type: string
         default: "0.02"
 
@@ -54,6 +59,7 @@ jobs:
           KRW_DEDUCTION: "2500000"
           APPLY_TAX:     ${{ inputs.apply_tax }}
           CASH_CCY:      ${{ inputs.cash_ccy }}
+          KRW_RATE_SOURCE: ${{ inputs.krw_rate_source }}
         run: python krw_study.py
 
       - name: Upload results
