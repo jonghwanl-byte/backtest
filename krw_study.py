@@ -74,6 +74,13 @@ START = env("START", "")                        # 성과 집계 시작일. run_s
 KRW_CASH_RATE = float(env("KRW_CASH_RATE", "0.02"))   # 원화 현금 연이율
 KRW_DEDUCTION = float(env("KRW_DEDUCTION", "2500000")) # 양도세 기본공제 (원)
 
+# 현금을 어느 통화로 보유하는가.
+#   usd: 달러 단기채(^IRX 금리 + 환노출). 실제 운용 방식.
+#        스칼라 0% 구간에 포트폴리오 전액이 달러 현금이 되므로
+#        위기 성과가 이 설정에 크게 좌우된다.
+#   krw: 원화 예치(고정금리, 환노출 없음). 대조군.
+CASH_CCY = env("CASH_CCY", "usd").lower()
+
 # 연금계좌는 해외주식 양도소득세가 없다.
 # 검증된 기준값(CAGR 9.9% / MDD -14.5% / Sharpe 0.877)이 '세전, 연금계좌'
 # 기준이므로 게이트를 맞추려면 false 여야 한다.
@@ -161,16 +168,28 @@ def load_fx() -> pd.Series:
 # 지표
 # ---------------------------------------------------------------------------
 
-def stats(returns: pd.Series) -> dict:
+def stats(returns: pd.Series, cash: pd.Series | None = None) -> dict:
+    """CAGR / MDD / 샤프.
+
+    Sharpe    : 원시 (평균수익 / 변동성)
+    Sharpe_ex : 무위험수익 차감 후. taa/metrics.py 정의와 대조하는 용도.
+                게이트 확인은 이쪽 값으로 볼 것.
+    """
     curve = (1.0 + returns).cumprod()
     years = len(returns) / 252.0
     vol = returns.std() * np.sqrt(252)
-    return {
+    out = {
         "CAGR": curve.iloc[-1] ** (1.0 / years) - 1.0,
         "MDD": (curve / curve.cummax() - 1.0).min(),
         "Sharpe": (returns.mean() * 252) / vol if vol > 0 else np.nan,
+        "Sharpe_ex": np.nan,
         "Vol": vol,
     }
+    if cash is not None and vol > 0:
+        rf = cash.reindex(returns.index).fillna(0.0)
+        ex = returns - rf
+        out["Sharpe_ex"] = (ex.mean() * 252) / (ex.std() * np.sqrt(252))
+    return out
 
 
 def pct(x) -> str:
@@ -209,7 +228,7 @@ def main() -> int:
     ex_usd = ExecConfig(apply_tax=APPLY_TAX)
 
     print(f"[설정] apply_tax={APPLY_TAX}  START={START or '(전체)'}  "
-          f"fx={FX_SOURCE}  krw_cash={KRW_CASH_RATE:.2%}")
+          f"fx={FX_SOURCE}  cash_ccy={CASH_CCY}")
     if APPLY_TAX:
         print("       주의: 과세 적용 상태입니다. 검증 기준값(9.9%/-14.5%)은 "
               "세전·연금계좌 기준이므로 게이트가 맞지 않습니다.")
@@ -240,10 +259,22 @@ def main() -> int:
         ex_usd,
         initial_capital=ex_usd.initial_capital * fx0,   # 동일 규모로 환산
         annual_deduction_usd=KRW_DEDUCTION,             # 원화 표시이므로 250만원
-        use_real_cash_rate=False,
-        flat_cash_rate=KRW_CASH_RATE,                   # 현금은 원화, 환노출 없음
     )
-    cash_krw = pd.Series(KRW_CASH_RATE / 252.0, index=px_usd.index)
+
+    if CASH_CCY == "usd":
+        # 현금을 달러 단기채로 보유 -> 원화 기준으로는 환노출이 있다.
+        # 엔진이 매일 cash *= (1 + rf[i]) 하므로 환변동을 합성해 넘긴다.
+        #   원화 기준 수익률 = (1 + 달러금리) x (1 + 환율변동) - 1
+        # 스칼라 0% 구간(위기)에 포트폴리오가 100% 달러 현금이 되므로
+        # 이 항이 위기 성과를 좌우한다.
+        fx_ret = fx_aligned.pct_change().fillna(0.0)
+        cash_krw = ((1.0 + cash_usd) * (1.0 + fx_ret) - 1.0).rename("cash")
+        print("      현금: USD 단기채 (^IRX + 환노출)")
+    else:
+        cash_krw = pd.Series(KRW_CASH_RATE / 252.0, index=px_usd.index, name="cash")
+        ex_krw = replace(ex_krw, use_real_cash_rate=False,
+                         flat_cash_rate=KRW_CASH_RATE)
+        print(f"      현금: KRW 예치 (연 {KRW_CASH_RATE:.2%}, 환노출 없음)")
 
     res_krw = run_backtest(
         px_krw, cash_krw, strat, ex_krw,
@@ -252,9 +283,10 @@ def main() -> int:
 
     print("[5/5] 집계")
     r_usd, r_krw = res_usd.returns, res_krw.returns
-    comp = pd.DataFrame(
-        [dict(기준="USD", **stats(r_usd)), dict(기준="KRW", **stats(r_krw))]
-    ).set_index("기준")
+    comp = pd.DataFrame([
+        dict(기준="USD", **stats(r_usd, cash_usd)),
+        dict(기준="KRW", **stats(r_krw, cash_krw)),
+    ]).set_index("기준")
     subs = subperiods(r_usd, r_krw)
 
     # 신호 동일성 확인: 두 런의 목표비중 경로가 같아야 변형 A가 성립
@@ -277,14 +309,17 @@ def main() -> int:
 
     md = [
         "## 원화 기준 백테스트",
-        f"기간 {r_usd.index[0].date()} ~ {r_usd.index[-1].date()} | 환율 {FX_SOURCE}",
+        f"기간 {r_usd.index[0].date()} ~ {r_usd.index[-1].date()} "
+        f"| 환율 {FX_SOURCE} | 현금 {CASH_CCY.upper()} | 과세 {APPLY_TAX}",
         "",
         "### 게이트 — USD 결과가 9.9% / -14.5% / 0.877 근처인가?",
-        "| 기준 | CAGR | MDD | Sharpe | Vol |", "|---|---|---|---|---|",
+        "| 기준 | CAGR | MDD | Sharpe(원시) | Sharpe(초과) | Vol |",
+        "|---|---|---|---|---|---|",
     ]
     for label, row in comp.iterrows():
         md.append(f"| {label} | {pct(row['CAGR'])} | {pct(row['MDD'])} "
-                  f"| {row['Sharpe']:.3f} | {pct(row['Vol'])} |")
+                  f"| {row['Sharpe']:.3f} | {row['Sharpe_ex']:.3f} "
+                  f"| {pct(row['Vol'])} |")
     if not subs.empty:
         md += ["", "### 구간별",
                "| 구간 | USD 수익 | KRW 수익 | USD MDD | KRW MDD |",
