@@ -9,14 +9,14 @@ on:
         type: choice
         options: [fred, yfinance]
         default: fred
-      tickers:
-        description: "대상 티커 (콤마 구분)"
-        type: string
-        default: "QQQ,TLT,GLD"
       start:
         description: "시작일 YYYY-MM-DD (비우면 전체 이력)"
         type: string
         default: ""
+      apply_tax:
+        description: "양도소득세 적용 (연금계좌는 false. 게이트 확인 시 false)"
+        type: boolean
+        default: false
       krw_cash_rate:
         description: "원화 현금 연이율 (0.02 = 2%)"
         type: string
@@ -44,10 +44,10 @@ jobs:
       - name: Run KRW study
         env:
           FX_SOURCE:     ${{ inputs.fx_source }}
-          TICKERS:       ${{ inputs.tickers }}
           START:         ${{ inputs.start }}
           KRW_CASH_RATE: ${{ inputs.krw_cash_rate }}
           KRW_DEDUCTION: "2500000"
+          APPLY_TAX:     ${{ inputs.apply_tax }}
         run: python krw_study.py
 
       - name: Upload results
