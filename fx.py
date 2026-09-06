@@ -28,7 +28,8 @@ def load_fx_yfinance() -> pd.Series:
     """
     import yfinance as yf
 
-    df = yf.download("KRW=X", period="max", auto_adjust=False, progress=False)
+    df = yf.download("KRW=X", period="max", auto_adjust=False,
+                     progress=False, threads=False)
     fx = df["Close"]
     if isinstance(fx, pd.DataFrame):          # yfinance가 MultiIndex를 줄 때
         fx = fx.iloc[:, 0]
