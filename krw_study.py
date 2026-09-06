@@ -22,12 +22,26 @@ from __future__ import annotations
 import os
 import sys
 import traceback
+import tempfile
+import time
 from datetime import datetime, timezone, timedelta
 
 import pandas as pd
 import yfinance as yf
 
 import fx as fxlib
+
+
+# yfinance는 시간대 정보를 SQLite에 캐싱한다. 멀티 티커 다운로드가
+# 스레드로 동시에 이 파일을 물면 "database is locked"가 난다.
+# 실행마다 격리된 임시 경로를 쓰게 해서 회피한다.
+_YF_CACHE = os.path.join(tempfile.gettempdir(), "yf_cache")
+os.makedirs(_YF_CACHE, exist_ok=True)
+for _setter in ("set_tz_cache_location", "set_cache_location"):
+    try:
+        getattr(yf, _setter)(_YF_CACHE)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -100,18 +114,64 @@ def build_weights(prices_usd: pd.DataFrame) -> pd.DataFrame:
 # 데이터
 # ---------------------------------------------------------------------------
 
+def _download_one(ticker: str, tries: int = 4) -> pd.Series:
+    """
+    티커 하나를 단일 스레드로 받는다.
+
+    threads=False가 핵심이다. 멀티 티커 병렬 다운로드가 tz 캐시 SQLite를
+    동시에 물면서 'database is locked'를 유발했다.
+    """
+    last_err = None
+    for i in range(tries):
+        try:
+            df = yf.download(
+                ticker, period="max", auto_adjust=True,
+                progress=False, threads=False,
+            )
+            if df is not None and not df.empty:
+                s = df["Close"]
+                if isinstance(s, pd.DataFrame):
+                    s = s.iloc[:, 0]
+                s = pd.to_numeric(s, errors="coerce").dropna()
+                if len(s) > 100:
+                    print(f"      {ticker}: {len(s)}일  "
+                          f"({s.index[0].date()} ~ {s.index[-1].date()})")
+                    return s
+                last_err = f"데이터가 {len(s)}행뿐"
+            else:
+                last_err = "빈 응답"
+        except Exception as e:
+            last_err = repr(e)
+        wait = 3 * (i + 1)
+        print(f"      {ticker}: 시도 {i + 1}/{tries} 실패 ({last_err}) — {wait}초 대기")
+        time.sleep(wait)
+
+    raise RuntimeError(f"{ticker} 다운로드 실패: {last_err}")
+
+
 def load_prices(tickers: list[str]) -> pd.DataFrame:
-    """워밍업을 위해 period='max'. 고정 기간 사용 금지."""
-    df = yf.download(
-        tickers, period="max", auto_adjust=True,
-        progress=False, group_by="column",
-    )
-    px = df["Close"] if isinstance(df.columns, pd.MultiIndex) else df
-    if isinstance(px, pd.Series):
-        px = px.to_frame(tickers[0])
-    px = px[tickers].dropna(how="all")
+    """
+    워밍업을 위해 period='max'. 고정 기간 사용 금지.
+
+    한 종목이라도 실패하면 즉시 중단한다. 조용히 NaN 컬럼으로 넘어가면
+    dropna()가 전 구간을 날려버리고, 엉뚱한 곳에서 IndexError가 난다.
+    """
+    series = {t: _download_one(t.strip()) for t in tickers}
+    px = pd.concat(series, axis=1)
+    px.columns = [t.strip() for t in tickers]
+
+    px.index = pd.to_datetime(px.index)
+    if getattr(px.index, "tz", None) is not None:
+        px.index = px.index.tz_localize(None)
+
+    before = len(px)
     px = px.dropna()                     # 전 종목 공통 구간만 사용
-    px.index = pd.to_datetime(px.index).tz_localize(None)
+    print(f"      공통 구간: {len(px)}일 (전체 {before}일에서 정렬)")
+
+    if px.empty:
+        raise RuntimeError(
+            "전 종목 공통 구간이 비었습니다. 티커별 시작일이 겹치지 않는지 확인하세요."
+        )
     return px
 
 
@@ -120,7 +180,11 @@ def load_fx() -> pd.Series:
         s = fxlib.load_fx_yfinance()
     else:
         s = fxlib.load_fx_fred()
-    s.index = pd.to_datetime(s.index).tz_localize(None)
+    s.index = pd.to_datetime(s.index)
+    if getattr(s.index, "tz", None) is not None:
+        s.index = s.index.tz_localize(None)
+    if s.empty:
+        raise RuntimeError(f"환율 데이터가 비었습니다 (소스: {FX_SOURCE})")
     return s
 
 
