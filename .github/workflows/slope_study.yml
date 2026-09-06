@@ -1,0 +1,51 @@
+name: Slope Study
+
+# MA 기울기 조건 실험. 수동 실행 전용.
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "성과 집계 시작일 YYYY-MM-DD (run_study.py와 맞출 것)"
+        type: string
+        default: ""
+      apply_tax:
+        description: "양도소득세 적용 (연금계좌는 false)"
+        type: boolean
+        default: false
+
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "yfinance==0.2.65" "pandas<3" "numpy<3"
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run slope study
+        env:
+          START:     ${{ inputs.start }}
+          APPLY_TAX: ${{ inputs.apply_tax }}
+        run: python slope_study.py
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slope-study-results
+          path: |
+            slope_summary.csv
+            slope_solo.csv
+            slope_returns.csv
+          if-no-files-found: warn
+          retention-days: 30
