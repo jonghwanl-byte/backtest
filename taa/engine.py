@@ -57,10 +57,17 @@ def run_backtest(
     strat: StrategyConfig,
     ex: ExecConfig,
     warmup_from: pd.Timestamp | None = None,
+    signal_prices: pd.DataFrame | None = None,   # ← 추가
 ) -> BacktestResult:
-    """전체 히스토리로 신호를 워밍업한 뒤, warmup_from 이후만 성과 집계."""
+    """전체 히스토리로 신호를 워밍업한 뒤, warmup_from 이후만 성과 집계.
+
+    signal_prices: 신호 계산용 가격을 체결 가격과 분리할 때 사용.
+        None이면 prices를 그대로 쓴다(기존 동작).
+        원화 백테스트에서 '신호는 달러, 체결은 원화'를 구현하는 데 쓴다.
+    """
     tw = target_weights(
-        prices, strat.base_weights, strat.bands, strat.ma_windows, strat.scalar_map
+        prices if signal_prices is None else signal_prices,   # ← 변경
+        strat.base_weights, strat.bands, strat.ma_windows, strat.scalar_map
     )
     # 체결 지연 반영: 신호 T -> 체결 T+exec_lag -> 수익 T+exec_lag+1 부터
     tw_eff = tw.shift(1 + ex.exec_lag).fillna(0.0)
