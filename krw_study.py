@@ -201,7 +201,7 @@ def write_summary(text: str) -> None:
 
 def main() -> int:
     strat = StrategyConfig()
-    ex_usd = ExecConfig()
+    ex_usd = ExecConfig(apply_tax=False)
 
     print(f"[1/5] 가격 로드 {list(TICKERS)}")
     px_usd = load_prices()
