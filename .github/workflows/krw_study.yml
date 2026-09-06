@@ -17,8 +17,13 @@ on:
         description: "양도소득세 적용 (연금계좌는 false. 게이트 확인 시 false)"
         type: boolean
         default: false
+      cash_ccy:
+        description: "현금 보유 통화 (usd = 달러 단기채, 실제 운용 방식)"
+        type: choice
+        options: [usd, krw]
+        default: usd
       krw_cash_rate:
-        description: "원화 현금 연이율 (0.02 = 2%)"
+        description: "cash_ccy=krw 일 때만 사용하는 원화 연이율"
         type: string
         default: "0.02"
 
@@ -48,6 +53,7 @@ jobs:
           KRW_CASH_RATE: ${{ inputs.krw_cash_rate }}
           KRW_DEDUCTION: "2500000"
           APPLY_TAX:     ${{ inputs.apply_tax }}
+          CASH_CCY:      ${{ inputs.cash_ccy }}
         run: python krw_study.py
 
       - name: Upload results
