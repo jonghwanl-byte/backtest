@@ -74,6 +74,11 @@ START = env("START", "")                        # 성과 집계 시작일. run_s
 KRW_CASH_RATE = float(env("KRW_CASH_RATE", "0.02"))   # 원화 현금 연이율
 KRW_DEDUCTION = float(env("KRW_DEDUCTION", "2500000")) # 양도세 기본공제 (원)
 
+# 연금계좌는 해외주식 양도소득세가 없다.
+# 검증된 기준값(CAGR 9.9% / MDD -14.5% / Sharpe 0.877)이 '세전, 연금계좌'
+# 기준이므로 게이트를 맞추려면 false 여야 한다.
+APPLY_TAX = env("APPLY_TAX", "false").lower() in ("1", "true", "yes")
+
 SUBPERIODS = {
     "2008 금융위기":     ("2007-10-01", "2009-03-31"),
     "2020 코로나":       ("2020-02-01", "2020-04-30"),
@@ -201,7 +206,13 @@ def write_summary(text: str) -> None:
 
 def main() -> int:
     strat = StrategyConfig()
-    ex_usd = ExecConfig(apply_tax=False)
+    ex_usd = ExecConfig(apply_tax=APPLY_TAX)
+
+    print(f"[설정] apply_tax={APPLY_TAX}  START={START or '(전체)'}  "
+          f"fx={FX_SOURCE}  krw_cash={KRW_CASH_RATE:.2%}")
+    if APPLY_TAX:
+        print("       주의: 과세 적용 상태입니다. 검증 기준값(9.9%/-14.5%)은 "
+              "세전·연금계좌 기준이므로 게이트가 맞지 않습니다.")
 
     print(f"[1/5] 가격 로드 {list(TICKERS)}")
     px_usd = load_prices()
