@@ -81,6 +81,13 @@ KRW_DEDUCTION = float(env("KRW_DEDUCTION", "2500000")) # 양도세 기본공제 
 #   krw: 원화 예치(고정금리, 환노출 없음). 대조군.
 CASH_CCY = env("CASH_CCY", "usd").lower()
 
+# 원화 현금 금리 소스.
+#   fred: 한국 3개월 은행간금리 (FRED IR3TIB01KRM156N, 월간, 1991~)
+#         2008년처럼 신호가 꺼져 전액 현금인 해에 실제로 5%대를 받았다.
+#         고정 2%로 두면 원화 현금 쪽이 부당하게 불리해진다.
+#   flat: KRW_CASH_RATE 고정. 민감도 확인용.
+KRW_RATE_SOURCE = env("KRW_RATE_SOURCE", "fred").lower()
+
 # 연금계좌는 해외주식 양도소득세가 없다.
 # 검증된 기준값(CAGR 9.9% / MDD -14.5% / Sharpe 0.877)이 '세전, 연금계좌'
 # 기준이므로 게이트를 맞추려면 false 여야 한다.
@@ -151,13 +158,36 @@ def load_usd_cash(index: pd.DatetimeIndex, ex: ExecConfig) -> pd.Series:
     return (annual.reindex(index).ffill().bfill() / 252.0).rename("cash")
 
 
+def _fred(series_id: str) -> pd.Series:
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+    df = pd.read_csv(url, parse_dates=[0], index_col=0)
+    s = pd.to_numeric(df.iloc[:, 0], errors="coerce").dropna()
+    return _naive_index(s)
+
+
+def load_krw_cash(index: pd.DatetimeIndex, ex: ExecConfig) -> pd.Series:
+    """원화 단기채 ETF 파킹 수익률 (일간).
+
+    ETF 보수/스프레드는 ex.cash_spread 로 차감한다.
+    """
+    if KRW_RATE_SOURCE == "flat":
+        print(f"      원화금리: 고정 {KRW_CASH_RATE:.2%}")
+        return pd.Series(KRW_CASH_RATE / 252.0, index=index, name="cash")
+
+    s = _fred("IR3TIB01KRM156N")          # 한국 3개월 은행간금리 (월간, %)
+    annual = (s / 100.0 - ex.cash_spread).clip(lower=0.0)
+    daily = (annual.reindex(index.union(annual.index)).ffill()
+             .reindex(index).ffill().bfill() / 252.0)
+    print(f"      원화금리: FRED {s.index[0].date()}~{s.index[-1].date()}, "
+          f"평균 {annual.mean():.2%}")
+    return daily.rename("cash")
+
+
 def load_fx() -> pd.Series:
     if FX_SOURCE == "yfinance":
         s = _download("KRW=X")
     else:
-        url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DEXKOUS"
-        df = pd.read_csv(url, parse_dates=[0], index_col=0)
-        s = pd.to_numeric(df.iloc[:, 0], errors="coerce").dropna()
+        s = _fred("DEXKOUS")
     s = _naive_index(s)
     s.name = "USDKRW"
     print(f"      환율: {s.index[0].date()} ~ {s.index[-1].date()} ({len(s)}행)")
@@ -228,7 +258,7 @@ def main() -> int:
     ex_usd = ExecConfig(apply_tax=APPLY_TAX)
 
     print(f"[설정] apply_tax={APPLY_TAX}  START={START or '(전체)'}  "
-          f"fx={FX_SOURCE}  cash_ccy={CASH_CCY}")
+          f"fx={FX_SOURCE}  cash_ccy={CASH_CCY}  krw_rate={KRW_RATE_SOURCE}")
     if APPLY_TAX:
         print("       주의: 과세 적용 상태입니다. 검증 기준값(9.9%/-14.5%)은 "
               "세전·연금계좌 기준이므로 게이트가 맞지 않습니다.")
@@ -271,10 +301,8 @@ def main() -> int:
         cash_krw = ((1.0 + cash_usd) * (1.0 + fx_ret) - 1.0).rename("cash")
         print("      현금: USD 단기채 (^IRX + 환노출)")
     else:
-        cash_krw = pd.Series(KRW_CASH_RATE / 252.0, index=px_usd.index, name="cash")
-        ex_krw = replace(ex_krw, use_real_cash_rate=False,
-                         flat_cash_rate=KRW_CASH_RATE)
-        print(f"      현금: KRW 예치 (연 {KRW_CASH_RATE:.2%}, 환노출 없음)")
+        cash_krw = load_krw_cash(px_usd.index, ex_usd)
+        print("      현금: KRW 단기채 ETF (환노출 없음)")
 
     res_krw = run_backtest(
         px_krw, cash_krw, strat, ex_krw,
@@ -327,6 +355,12 @@ def main() -> int:
         for name, row in subs.iterrows():
             md.append(f"| {name} | {pct(row['USD 수익'])} | {pct(row['KRW 수익'])} "
                       f"| {pct(row['USD MDD'])} | {pct(row['KRW MDD'])} |")
+    md += ["", "### 진단", "| 항목 | USD | KRW |", "|---|---|---|"]
+    for k in ("n_trades", "trades_per_year", "annual_turnover",
+              "time_in_market", "avg_equity_exposure"):
+        u = res_usd.diagnostics.get(k, float("nan"))
+        k2 = res_krw.diagnostics.get(k, float("nan"))
+        md.append(f"| {k} | {u:,.3f} | {k2:,.3f} |")
     write_summary("\n".join(md))
 
     print(f"\n완료 {datetime.now(KST):%Y-%m-%d %H:%M KST}")
